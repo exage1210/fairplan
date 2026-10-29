@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
-  nextSwap, packageOwners, inSeason, groupOf, windowsBetween, awayDuring,
+  packageOwners, inSeason, windowsBetween, awayDuring,
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays,
 } from '../js/logic.js';
 
@@ -11,7 +11,6 @@ const ctx = (over = {}) => ({
   setup: '2026-10-28',
   persons: [{ id: 'p1', name: 'Anna' }, { id: 'p2', name: 'Ben' }],
   swapped: false,
-  rotation: { short: 2, quarter: 6, half: 12, year: 12 },
   ...over,
 });
 const task = (over = {}) => ({ id: 't', title: 'T', n: 1, unit: 'week', assign: 'shared', season: null, created: '2026-10-28', ...over });
@@ -19,6 +18,7 @@ const one = (t, c, today, done = []) => {
   const m = new Map(done.map(([key, slot]) => [completionId(t.id, key, slot), { by: 'p1' }]));
   return evaluate(t, c, today, m)[0];
 };
+const st = (t, c, today, done) => { const i = one(t, c, today, done); return [i.status, i.due, i.end]; };
 
 test('Datumsumrechnung ist stabil', () => {
   assert.equal(fromDay(toDay('2026-03-29')), '2026-03-29'); // Sommerzeit-Umstellung
@@ -72,41 +72,6 @@ test('alle 2 Wochen: gezählt ab der Einrichtungswoche, über den Jahreswechsel'
   assert.equal(one(t, ctx(), '2027-01-04').key, 'biweekly:2027-01-04');
 });
 
-test('Rotation: Paket A/B tauscht alle 2 Monate ab Einrichtungsmonat', () => {
-  const c = ctx();
-  assert.deepEqual(packageOwners('short', c, toDay('2026-10-28')), ['p1', 'p2']);
-  assert.deepEqual(packageOwners('short', c, toDay('2026-11-30')), ['p1', 'p2']);
-  assert.deepEqual(packageOwners('short', c, toDay('2026-12-01')), ['p2', 'p1']);
-  assert.deepEqual(packageOwners('short', c, toDay('2027-01-31')), ['p2', 'p1']);
-  assert.deepEqual(packageOwners('short', c, toDay('2027-02-01')), ['p1', 'p2']);
-  assert.equal(nextSwap('short', c, '2026-10-28'), '2026-12-01');
-  assert.equal(nextSwap('short', c, '2026-12-15'), '2027-02-01');
-  assert.equal(nextSwap('quarter', c, '2026-12-15'), '2027-04-01');
-  // manuell umgedreht
-  assert.deepEqual(packageOwners('short', ctx({ swapped: true }), toDay('2026-10-28')), ['p2', 'p1']);
-});
-
-test('Rotation: Zuständigkeit folgt der Periode, nicht dem heutigen Tag', () => {
-  const t = task({ assign: 'A', created: '2026-11-01' });
-  // Woche 30.11.–6.12. beginnt im November → noch Anna
-  assert.equal(one(t, ctx(), '2026-12-02').owner, 'p1');
-  // Woche ab 7.12. → Ben
-  assert.equal(one(t, ctx(), '2026-12-08', [['weekly:2026-11-30', null]]).owner, 'p2');
-  // Anna hat ihre letzte Woche verpasst → überfällig bleibt bei Anna
-  const o = one(t, ctx(), '2026-12-08');
-  assert.equal(o.status, 'overdue');
-  assert.equal(o.owner, 'p1');
-  assert.equal(one(task({ assign: 'B' }), ctx(), '2026-10-28').owner, 'p2');
-});
-
-test('Intervallgruppen', () => {
-  assert.equal(groupOf({ n: 1, unit: 'month' }), 'short');
-  assert.equal(groupOf({ n: 3, unit: 'month' }), 'quarter');
-  assert.equal(groupOf({ n: 6, unit: 'month' }), 'half');
-  assert.equal(groupOf({ n: 12, unit: 'month' }), 'year');
-  assert.equal(groupOf({ n: 10, unit: 'day' }), 'short');
-});
-
 test('täglich abwechselnd, auch über den Jahreswechsel', () => {
   const t = task({ n: 1, unit: 'day', assign: 'alternate' });
   const owners = ['2026-12-30', '2026-12-31', '2027-01-01', '2027-01-02']
@@ -145,19 +110,20 @@ test('Aufwand pro Monat: Häufigkeit × Minuten, Saison anteilig, bei Bedarf ges
   near(monthlyMinutes(task({ n: 1, unit: 'week' })), 0);
 });
 
-test('Faire Aufteilung: je Gruppe ausgeglichen, Gemeinsames zählt halb, Pakettausch abschaltbar', () => {
+test('Faire Aufteilung: je Intervall ausgeglichen, Gemeinsames zählt halb, Pakete fix', () => {
   const w = (min, assign = 'A') => task({ n: 1, unit: 'week', min, assign });
-  const split = autoSplit([w(60), w(30), w(20), w(10), task({ n: 3, unit: 'month', min: 90, assign: 'A' }), w(40, 'shared')]);
-  assert.deepEqual(split.map((t) => t.assign), ['A', 'B', 'B', 'B', 'A', 'shared']); // 60 | 30+20+10
-  const load = loadByPerson(split, ctx(), toDay('2026-11-01'));
-  assert.ok(Math.abs(load.p1 - load.p2 - 30) < 1e-9); // Vierteljährliches (90/3) bleibt in seiner Gruppe allein bei A
-  // Pakettausch nach 2 Monaten tauscht die Last; abgeschaltet bleibt sie
-  const later = toDay('2027-01-05');
-  assert.deepEqual(packageOwners('short', ctx(), later), ['p2', 'p1']);
-  assert.deepEqual(packageOwners('short', ctx({ rotationOff: true }), later), ['p1', 'p2']);
+  const q = (min) => task({ n: 3, unit: 'month', min, assign: 'A' });
+  const split = autoSplit([w(60), w(30), w(20), w(10), w(5), q(90), q(30), w(40, 'shared')]);
+  // wöchentlich: gleich viele Aufgaben (±1), Minuten möglichst gleich
+  const weekly = split.slice(0, 5).map((t) => t.assign);
+  assert.equal(weekly.filter((a) => a === 'A').length >= 2 && weekly.filter((a) => a === 'B').length >= 2, true);
+  assert.notEqual(split[5].assign, split[6].assign); // vierteljährlich: je eine Aufgabe
+  assert.equal(split[7].assign, 'shared');
+  const load = loadByPerson(split, ctx());
+  assert.ok(Math.abs(load.p1 - load.p2) < 60, `${load.p1} vs ${load.p2}`);
+  assert.deepEqual(packageOwners(ctx()), ['p1', 'p2']);
+  assert.deepEqual(packageOwners(ctx({ swapped: true })), ['p2', 'p1']);
 });
-
-const st = (t, c, today, done) => { const i = one(t, c, today, done); return [i.status, i.due, i.end]; };
 
 test('wöchentlich: am Putztag dran, 2 Tage Spielraum, dann vergessen', () => {
   const t = task({ assign: 'A' });
@@ -186,14 +152,14 @@ test('mehrere Putztage: wöchentlich wählt pos den Tag in der Woche', () => {
   assert.equal(one(task({ assign: 'A', pos: 2 }), c, '2026-11-02').due, '2026-11-04');
 });
 
-test('Putztage je Person: Termin wandert beim Pakettausch mit', () => {
+test('Putztage je Person: Paket B an den Tagen von Person 2', () => {
   const c = ctx({ persons: [{ id: 'p1', days: [5] }, { id: 'p2', days: [2] }] });
-  const t = task({ n: 1, unit: 'month', assign: 'A', pos: 1 }); // 2. Putztag im Monat
+  const t = task({ n: 1, unit: 'month', assign: 'B', pos: 1 }); // 2. Putztag im Monat
   const nov = one(t, c, '2026-11-02');
-  assert.deepEqual([nov.owner, nov.due, nov.end], ['p1', '2026-11-14', '2026-11-19']);
+  assert.deepEqual([nov.owner, nov.due, nov.end], ['p2', '2026-11-11', '2026-11-16']);
   const dec = one(t, c, '2026-12-01', [['monthly:2026-11-01', null]]);
-  assert.deepEqual([dec.owner, dec.due], ['p2', '2026-12-09']); // ab Dezember Paket A bei p2 → 2. Mittwoch
-  assert.equal(one(t, c, '2026-11-20').status, 'overdue');
+  assert.deepEqual([dec.owner, dec.due], ['p2', '2026-12-09']); // bleibt bei p2 (kein Pakettausch)
+  assert.equal(one(t, c, '2026-11-17').status, 'overdue');
 });
 
 test('Start des Plans: Termine davor zählen nicht', () => {
