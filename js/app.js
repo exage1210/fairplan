@@ -145,10 +145,18 @@ function connect(code) {
   ];
 }
 
+// Abmachungen: täglich abhakbar, eine Checkbox für beide. Kennung aus dem Text, damit Umsortieren nichts verschiebt.
+const ruleKey = () => `rule:${S.today}`;
+function ruleId(text) {
+  let h = 5381;
+  for (const ch of text) h = ((h * 33) ^ ch.codePointAt(0)) >>> 0;
+  return `rule-${h.toString(36)}`;
+}
+
 // Nur die Erledigungen der aktuellen und vorherigen Perioden laden (spart Lesezugriffe)
 function refreshCompletions() {
   if (!S.hh || !S.tasksLoaded) return;
-  const keys = relevantKeys(S.tasks, S.hh, S.today);
+  const keys = [...relevantKeys(S.tasks, S.hh, S.today), ruleKey()];
   const sig = keys.join('|');
   if (sig === S.compSig) return;
   S.compSig = sig;
@@ -281,6 +289,17 @@ function nowRow(it, sub = '') {
   </div>`;
 }
 
+// Abmachung als Zeile: graue Checkbox, abgehakt bleibt sie stehen und zeigt, wer's erledigt hat
+function ruleRow(text) {
+  const c = S.comps.get(completionId(ruleId(text), ruleKey(), null));
+  return `<div class="item ${c ? 'done' : ''}" style="--pc:var(--shared)">
+    <label class="check"><input type="checkbox" data-action="toggle-rule" data-rule="${esc(text)}" ${c ? 'checked' : ''}
+      aria-label="${esc(text)} erledigt"><span class="box"></span></label>
+    <div class="body"><div class="head"><span class="title">${esc(text)}</span><span class="kind">täglich</span></div>
+      ${c ? `<div class="meta">erledigt von ${byName(c.by)}</div>` : ''}</div>
+  </div>`;
+}
+
 // Aufklappbarer Bereich; Zustand bleibt beim Neuzeichnen erhalten
 function fold(key, summary, body) {
   return `<details class="fold" data-fold="${key}" ${S.open[key] ? 'open' : ''}><summary>${summary}</summary>${body}</details>`;
@@ -378,10 +397,10 @@ function viewToday() {
 
   const rules = (S.hh.rules || []).filter(Boolean);
   return `<div class="banner now">${banner}</div>
-    ${rules.length ? fold('rules', `Unsere Abmachungen <span class="count">${rules.length}</span>`,
-      `<ul class="rules">${rules.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`) : ''}
     ${group('Noch offen', late)}
     ${group('Heute', today)}
+    ${rules.length ? `<section class="group"><h2>Abmachungen<span class="count">${rules.filter((r) => S.comps.has(completionId(ruleId(r), ruleKey(), null))).length}/${rules.length}</span></h2>
+      <div class="list">${rules.map(ruleRow).join('')}</div></section>` : ''}
     ${group('Diese Woche', week)}
     ${later.length ? fold('later', `Später <span class="count">${later.length}</span>`, rows(later)) : ''}
     ${need.length ? fold('need', `Bei Bedarf <span class="count">${need.length}</span>`, rows(need, () => '')) : ''}
@@ -423,6 +442,7 @@ const colorOf = (id) => { const p = person(id); return p ? `var(--c-${p.color})`
 
 // Monatsraster ab Montag: pro Tag ein Punkt je Person, die etwas erledigt hat.
 // Optional („Geplantes anzeigen“): Ringe = ab diesem Tag ist etwas dran (Farbe = wer).
+// Ringe nur ab heute und nie vor dem Start des Plans.
 // Oben die Monatsbilanz, darunter der Verlauf des Monats. Tag antippen öffnet ein Panel von unten.
 function viewCalendar() {
   const month = S.calMonth || S.today.slice(0, 7);
@@ -446,7 +466,7 @@ function viewCalendar() {
     const done = doneOn.get(ds) || [];
     const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id))
       .map((p) => `<i style="--pc:var(--c-${p.color})"></i>`).join('')
-      + (plan ? [...(starts.get(ds) || [])].map((o) => `<i class="plan" style="--pc:${colorOf(o)}"></i>`).join('') : '');
+      + (plan && ds >= S.today && ds >= S.hh.setup ? [...(starts.get(ds) || [])].map((o) => `<i class="plan" style="--pc:${colorOf(o)}"></i>`).join('') : '');
     const cls = [ds.slice(0, 7) !== month ? 'out' : '', ds === S.today ? 'today' : '', ds === S.calDay ? 'sel' : ''].join(' ');
     cells.push(`<button class="day ${cls}" data-cal-day="${ds}"><span>${asDate(ds).getDate()}</span><span class="dots">${dots}</span></button>`);
   }
@@ -570,7 +590,7 @@ function viewSettings() {
     <p class="small">Standard ist der Tag der Einrichtung. Davor ist nichts „nicht geschafft“. Auch der 2-Wochen-Rhythmus und der Pakettausch zählen ab hier.</p>
 
     <h2>Unsere Abmachungen</h2>
-    <p class="small">Selbstverständliches, das ihr nicht abhaken wollt – z. B. „Geschirr macht, wer nicht kocht“. Eine Abmachung pro Zeile. Steht bei „Aktuell“ oben zum Aufklappen und zählt nicht in der Bilanz.</p>
+    <p class="small">Selbstverständliches für jeden Tag – z. B. „Kochen“ oder „Geschirr macht, wer nicht kocht“. Eine Abmachung pro Zeile. Steht bei „Aktuell“ unter „Heute“: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für beide ab. Wird nie als offen angezeigt, zählt aber in Bilanz und Verlauf.</p>
     <label class="field"><textarea data-rules rows="5" placeholder="Geschirr macht, wer nicht kocht&#10;Abends kurz aufräumen">${esc((hh.rules || []).join('\n'))}</textarea></label>
 
     <h2>Aufgaben</h2>
@@ -733,6 +753,23 @@ function toggle(input) {
   }
 }
 
+function toggleRule(input) {
+  const title = input.dataset.rule;
+  const id = completionId(ruleId(title), ruleKey(), null);
+  if (input.checked) {
+    S.store.setCompletion(S.code, id, {
+      taskId: ruleId(title), title, key: ruleKey(), slot: null, forPerson: null,
+      by: S.me, at: new Date().toISOString(), day: S.today, rule: true,
+    });
+    navigator.vibrate?.(10);
+    snack('Erledigt.', () => S.store.removeCompletion(S.code, id));
+  } else {
+    const prev = S.comps.get(id);
+    S.store.removeCompletion(S.code, id);
+    snack('Wieder offen.', prev ? () => S.store.setCompletion(S.code, id, prev) : null);
+  }
+}
+
 async function copyCode() {
   const text = formatCode(S.code);
   try { await navigator.clipboard.writeText(text); snack('Code kopiert.'); } catch { snack(`Code: ${text}`); }
@@ -799,6 +836,7 @@ app.addEventListener('change', (e) => {
   const el = e.target;
   const d = el.dataset;
   if (d.action === 'toggle') return toggle(el);
+  if (d.action === 'toggle-rule') return toggleRule(el);
   if (d.action === 'plan') { ls.set('plan', el.checked ? '1' : null); return render(); }
   if (d.personName !== undefined) {
     const name = el.value.trim();

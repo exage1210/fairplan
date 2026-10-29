@@ -11,8 +11,10 @@ const N = { n: 0, unit: 'need' }; // bei Bedarf
 const t = (title, iv, assign, extra = {}) => ({ title, ...iv, assign, note: '', season: null, ...extra });
 const season = (from, to) => ({ season: { from, to } });
 
-// Abmachungen: Selbstverständliches ohne Abhaken
+// Abmachungen: Selbstverständliches, täglich für beide abhakbar (nie „offen“)
 export const TEMPLATE_RULES = [
+  'Einkaufen',
+  'Kochen',
   'Geschirr und Küche (Herd, Flächen) macht, wer nicht kocht',
   'Abends kurz gemeinsam aufräumen',
 ];
@@ -40,7 +42,6 @@ export const TEMPLATE = [
   t('Staubwischen', W, 'B'),
   t('Pflanzen gießen', W, 'B'),
   t('Loggia fegen', W, 'B'),
-  t('Einkaufen', W, 'B'),
   t('Vorzimmer aufwaschen', W2, 'B'),
   t('Küche aufwaschen', W2, 'B'),
   t('Böden Wohn-, Kinder- und Schlafzimmer aufwaschen', M, 'B'),
