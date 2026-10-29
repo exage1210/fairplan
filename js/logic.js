@@ -186,8 +186,10 @@ export function nextSwap(group, ctx, today) {
 }
 
 // Wer hat Paket A/B zu einem Tag (für eine Intervallgruppe)? → [personIdA, personIdB]
+// rotationOff: Pakettausch abgeschaltet → Pakete bleiben fix (nur „Zuteilung umdrehen“ wirkt)
 export function packageOwners(group, ctx, day) {
-  const flip = (mod(swapIndex(ctx.rotation[group], ctx, day), 2) === 1) !== !!ctx.swapped;
+  const swaps = ctx.rotationOff ? 0 : mod(swapIndex(ctx.rotation[group], ctx, day), 2);
+  const flip = (swaps === 1) !== !!ctx.swapped;
   const [p1, p2] = ctx.persons.map((p) => p.id);
   return flip ? [p2, p1] : [p1, p2];
 }
@@ -207,6 +209,53 @@ export function ownerOf(task, period, due, slot, ctx) {
       return task.assign === 'A' ? a : b;
     }
   }
+}
+
+// ---------- Aufwand & faire Aufteilung ----------
+
+// Wie oft pro Monat? täglich 30 · wöchentlich 4,3 · alle 2 Wochen 2,2 · monatlich 1 · vierteljährlich 1/3 …
+// Bei Bedarf: geschätzte Anzahl (perMonth). Saisonaufgaben nur anteilig (Saisonmonate / 12).
+export function timesPerMonth(task) {
+  const k = kindOf(task);
+  let n = k === 'asneeded' ? Number(task.perMonth) || 0
+    : k === 'biweekly' ? 2.2
+      : { day: 30, week: 4.3, month: 1 }[task.unit] / task.n;
+  if (task.season) n *= (mod(task.season.to - task.season.from, 12) + 1) / 12;
+  return n;
+}
+export const monthlyMinutes = (task) => (Number(task.min) || 0) * timesPerMonth(task);
+
+// Aufwand pro Person und Monat (Minuten) zu einem Tag: Pakete nach aktueller Zuteilung,
+// Gemeinsames und Abwechselndes je zur Hälfte, „pro Person“ voll.
+export function loadByPerson(tasks, ctx, day) {
+  const out = Object.fromEntries(ctx.persons.map((p) => [p.id, 0]));
+  for (const t of tasks) {
+    const m = monthlyMinutes(t);
+    if (t.assign === 'A' || t.assign === 'B') {
+      const [a, b] = packageOwners(groupOf(t), ctx, day);
+      out[t.assign === 'A' ? a : b] += m;
+    } else {
+      for (const id in out) out[id] += t.assign === 'each' ? m : m / ctx.persons.length;
+    }
+  }
+  return out;
+}
+
+// Pakete A/B fair aufteilen: je Intervallgruppe (die getrennt rotieren) nach Aufwand absteigend,
+// jede Aufgabe kommt ins Paket mit bisher weniger Aufwand. Andere Zuteilungen bleiben unverändert.
+export function autoSplit(tasks) {
+  const sum = {};
+  const order = tasks.map((t, i) => [t, i])
+    .filter(([t]) => t.assign === 'A' || t.assign === 'B')
+    .sort(([a, i], [b, j]) => monthlyMinutes(b) - monthlyMinutes(a) || i - j);
+  const assign = new Map();
+  for (const [t, i] of order) {
+    const g = sum[groupOf(t)] ||= { A: 0, B: 0 };
+    const p = g.A <= g.B ? 'A' : 'B';
+    g[p] += monthlyMinutes(t);
+    assign.set(i, p);
+  }
+  return tasks.map((t, i) => (assign.has(i) ? { ...t, assign: assign.get(i) } : t));
 }
 
 // ---------- Abwesenheit ----------

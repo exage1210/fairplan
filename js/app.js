@@ -1,6 +1,7 @@
 import {
   KINDS, PRESETS, GROUPS, kindOf, evaluate, relevantKeys, completionId, nextSwap,
   packageOwners, localToday, toDay, fromDay, groupOf, windowsBetween, awayDuring,
+  monthlyMinutes, loadByPerson, autoSplit,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { TEMPLATE, TEMPLATE_RULES } from './template.js';
@@ -73,6 +74,7 @@ const S = {
   me: ls.get('me'),
   view: 'heute',
   filter: 'all',
+  kindFilter: 'all',
   calMonth: null, // 'YYYY-MM', null = aktueller Monat
   calDay: null, // Tag im offenen Panel, null = Panel zu
   panelAnim: false, // Panel beim Öffnen einmal hereinfahren lassen
@@ -115,7 +117,16 @@ async function init() {
       <div class="btnrow"><button class="btn primary" onclick="location.reload()">Erneut versuchen</button></div>`;
     return;
   }
-  if (S.code) connect(S.code);
+  // Einladungslink ?join=CODE
+  const join = normalizeCode(new URLSearchParams(location.search).get('join') || '');
+  if (standalone()) history.replaceState(null, '', location.pathname);
+  if (join.length === 16 && join !== S.code
+    && (!S.code || confirm('Diesem Haushalt beitreten? Der bisherige wird auf diesem Gerät abgemeldet.'))) {
+    ls.set('me', null);
+    S.me = null;
+    startSetup();
+    joinHousehold(join);
+  } else if (S.code) connect(S.code);
   else startSetup();
 
   // Tageswechsel erkennen (z. B. App über Nacht offen)
@@ -172,7 +183,7 @@ function watchDays(range) {
   S.daySub?.();
   S.daySub = null;
   S.dayComps = [];
-  if (range) S.daySub = S.store.watchDays(S.code, range[0], range[1], (list) => { S.dayComps = list; render(); });
+  if (range) S.daySub = S.store.watchDays(S.code, range[0], range[1], (list) => { S.dayComps = list.filter((c) => c.step == null); render(); });
 }
 
 // ---------- Rendern ----------
@@ -210,6 +221,7 @@ function render() {
     ${views[S.view]()}
     <nav class="tabs">${tabs}</nav>`;
   window.scrollTo(0, scroll);
+  fillQr();
   updateBadge();
 }
 
@@ -251,7 +263,7 @@ function itemRow(it, { lead = 'interval' } = {}) {
   const p = person(it.owner);
   const active = ['due', 'overdue', 'upcoming', 'done', 'need'].includes(it.status);
   const first = lead === 'owner' ? ownerText(it) : lead === 'shared' ? (it.owner === null ? 'Gemeinsam' : '') : intervalLabel(it.task);
-  const meta = [first, statusText(it)].filter(Boolean).join(' · ');
+  const meta = [first, statusText(it), lead === 'owner' && it.task.min ? `${it.task.min} Min` : ''].filter(Boolean).join(' · ');
   const cls = [it.status, active ? '' : 'inactive'].join(' ');
   return `<div class="item ${cls}" style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
     <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(it.task.id)}" data-slot="${esc(it.slot ?? '')}"
@@ -285,9 +297,13 @@ function nowRow(it, sub = '') {
     <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}"
       ${done ? 'checked' : ''} aria-label="${esc(t.title)} erledigt"><span class="box"></span></label>
     <div class="body"><div class="head"><span class="title">${esc(t.title)}</span><span class="kind">${iv}</span></div>
-      ${extra ? `<div class="meta">${extra}</div>` : ''}</div>
+      ${extra ? `<div class="meta">${extra}</div>` : ''}${stepsBlock(it)}</div>
   </div>`;
 }
+
+// Ein/Aus-Schalter mit einem Satz Erklärung
+const switchRow = (key, on, label, hint) => `<label class="cb"><input type="checkbox" data-switch="${key}" ${on ? 'checked' : ''}> ${label}</label>
+  <p class="small">${hint}</p>`;
 
 // Vorgeschlagene Abmachungen als Knöpfe zum An-/Abwählen
 const ruleChips = (picked, attr) => `<div class="filters">${TEMPLATE_RULES.map((r) =>
@@ -398,7 +414,7 @@ function viewToday() {
   }).join('');
 
   const used = new Set(S.tasks.filter((t) => t.assign === 'A' || t.assign === 'B').map(groupOf));
-  const swaps = GROUPS.filter((g) => used.has(g))
+  const swaps = S.hh.rotationOff ? '' : GROUPS.filter((g) => used.has(g))
     .map((g) => `<div>${GROUP_LABEL[g]}: ${fmtLong(nextSwap(g, S.hh, S.today))}</div>`).join('');
 
   const rules = (S.hh.rules || []).filter(Boolean);
@@ -422,14 +438,21 @@ function filterBar() {
     .map(([v, l]) => `<button data-filter="${esc(v)}" aria-pressed="${f === v}">${esc(l)}</button>`).join('');
 }
 
+function kindBar() {
+  return [['all', 'Alle Intervalle'], ...KINDS.filter((k) => S.tasks.some((t) => kindOf(t) === k)).map((k) => [k, KIND_LABEL[k]])]
+    .map(([v, l]) => `<button data-kind-filter="${v}" aria-pressed="${S.kindFilter === v}">${esc(l)}</button>`).join('');
+}
+
 function viewAll() {
-  const f = S.filter;
-  const items = allItems().filter((i) => f === 'all' || (f === 'shared' ? i.owner === null : i.owner === f));
+  const f = S.filter, kf = S.kindFilter;
+  const items = allItems().filter((i) => (f === 'all' || (f === 'shared' ? i.owner === null : i.owner === f))
+    && (kf === 'all' || kindOf(i.task) === kf));
   const groups = KINDS.map((k) => {
     const g = sortItems(items.filter((i) => kindOf(i.task) === k));
     return g.length ? section(KIND_LABEL[k], g, { lead: 'owner' }) : '';
   }).join('');
-  return `<div class="filters">${filterBar()}</div>${groups || '<p class="muted" style="margin-top:24px">Keine Aufgaben.</p>'}`;
+  return `<div class="filters">${filterBar()}</div><div class="filters">${kindBar()}</div>
+    ${groups || '<p class="muted" style="margin-top:24px">Keine Aufgaben.</p>'}`;
 }
 
 // Sichtbarer Kalenderzeitraum: ganze Wochen (Mo–So) rund um den Monat
@@ -543,6 +566,7 @@ function viewSettings() {
   const opt = (v, l, cur) => `<option value="${v}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(l)}</option>`;
   const days = (cur) => Array.from({ length: 31 }, (_, i) => opt(i + 1, `${i + 1}.`, cur)).join('');
   const [a, b] = packageOwners('short', hh, toDay(S.today));
+  const load = loadByPerson(S.tasks, hh, toDay(S.today));
 
   const persons = hh.persons.map((p, i) => `<div class="setting">
       <label class="field">Person ${i + 1}<input type="text" data-person-name="${i}" value="${esc(p.name)}" maxlength="30"></label>
@@ -555,7 +579,7 @@ function viewSettings() {
 
   const tasks = S.tasks.length
     ? S.tasks.slice().sort((x, y) => kindRank(x) - kindRank(y) || (x.order ?? 0) - (y.order ?? 0)).map((t) => `
-      <button class="rowbtn" data-edit="${esc(t.id)}"><span>${esc(t.title)}<br><span class="meta">${intervalLabel(t)} · ${ASSIGN_LABEL[t.assign]}${t.season ? ` · Saison ${seasonLabel(t.season)}` : ''}</span></span><span class="meta">Bearbeiten</span></button>`).join('')
+      <button class="rowbtn" data-edit="${esc(t.id)}"><span>${esc(t.title)}<br><span class="meta">${intervalLabel(t)} · ${ASSIGN_LABEL[t.assign]}${t.min ? ` · ${t.min} Min` : ''}${t.season ? ` · Saison ${seasonLabel(t.season)}` : ''}</span></span><span class="meta">Bearbeiten</span></button>`).join('')
     : '<p class="muted">Noch keine Aufgaben.</p>';
 
   return `
@@ -573,8 +597,8 @@ function viewSettings() {
     </div>
 
     <h2>Haushalt</h2>
-    <p class="small">Haushalts-Code – damit tritt die zweite Person bei. Nicht öffentlich teilen.</p>
-    <p class="code">${formatCode(S.code)}</p>
+    <p class="small">Einladen: QR-Code mit der Handy-Kamera scannen oder Link schicken. Nicht öffentlich teilen.</p>
+    ${fold('invite', 'Einladen (QR-Code, Link)', inviteBlock())}
     <div class="btnrow"><button class="btn" data-action="copy">Code kopieren</button></div>
     ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}
 
@@ -601,14 +625,19 @@ function viewSettings() {
     <label class="field">Eigene Abmachungen<textarea data-rules rows="4" placeholder="Pflanzen am Fensterbrett gießen&#10;Post reinholen">${esc(ownRules().join('\n'))}</textarea></label>
 
     <h2>Aufgaben</h2>
+    <p class="small">Aufwand pro Monat (Dauer × Häufigkeit, Gemeinsames je zur Hälfte): ${hh.persons.map((p) => `${byName(p.id)} ${hours(load[p.id])} h`).join(' · ')}</p>
     <div class="btnrow"><button class="btn block" data-edit="">Aufgabe hinzufügen</button></div>
     <div class="rows">${tasks}</div>
 
-    <h2>Rotation</h2>
+    <h2>Plan neu einrichten</h2>
+    <p class="small">Aufgaben neu aus der Vorlage (fair aufgeteilt) oder leer aufbauen. Code, Verbindung zur anderen Person und Verlauf bleiben, der Start ist dann heute.</p>
+    <div class="btnrow"><button class="btn block" data-action="reset-plan">Plan neu einrichten</button></div>
+
+    <h2>Pakettausch</h2>
+    ${switchRow('rotation', !hh.rotationOff, 'Pakete regelmäßig tauschen', 'Paket A und B wechseln am Monatsersten, damit niemand dauerhaft dieselben Aufgaben hat.')}
     <p>Paket A: ${pn(a)} · Paket B: ${pn(b)}</p>
-    <p class="small">Pakete tauschen jeweils am Monatsersten, gezählt ab dem Einrichtungsmonat (${fmtLong(hh.setup)}).</p>
     <div class="btnrow"><button class="btn" data-action="flip">Zuteilung umdrehen</button></div>
-    ${rotation}
+    ${hh.rotationOff ? '' : `<p class="small">Gezählt ab dem Start des Plans (${fmtLong(hh.setup)}).</p>${rotation}`}
 
     <h2>Gemeinsamer Tag</h2>
     <p class="small">Halbjährliche und jährliche Aufgaben sind an diesem Tag ihrer Periode fällig.</p>
@@ -616,6 +645,14 @@ function viewSettings() {
       <label class="field">Monat<select data-shared="halfyearMonth">${[3, 4, 5].map((m) => opt(m, `${MONTHS[m - 1]} / ${MONTHS[m + 5]}`, hh.sharedDay.halfyearMonth)).join('')}</select></label></div>
     <div class="inline"><label class="field">Jährlich, Tag<select data-shared="yearlyDay">${days(hh.sharedDay.yearlyDay)}</select></label>
       <label class="field">Monat<select data-shared="yearlyMonth">${MONTHS.map((m, i) => opt(i + 1, m, hh.sharedDay.yearlyMonth)).join('')}</select></label></div>
+
+    ${canHaptic ? `<h2>Vibrieren</h2>
+    ${switchRow('vibrate', ls.get('vibrate') !== '0', 'Beim Abhaken kurz vibrieren', 'Gilt nur für dieses Gerät.')}` : ''}
+
+    <h2>Backup</h2>
+    <p class="small">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt die Aufgaben durch die aus der Datei.</p>
+    <div class="btnrow"><button class="btn" data-action="export">Daten exportieren</button><button class="btn" data-action="import">Daten importieren</button></div>
+    <input type="file" id="importFile" accept=".json,application/json" hidden>
 
     <h2>Abmelden</h2>
     <p class="small">Entfernt den Haushalt nur von diesem Gerät. Mit dem Code kannst du wieder beitreten.</p>
@@ -631,15 +668,23 @@ function renderWhoAmI() {
 
 // ---------- Einrichtung ----------
 
-function startSetup() {
-  S.setup = { step: 'start', persons: [{ name: '', color: 'blau' }, { name: '', color: 'rosa' }], rules: [], error: '' };
+// reset: „Plan neu einrichten“ im bestehenden Haushalt (Code, Verbindung und Verlauf bleiben)
+function startSetup(reset = false) {
+  S.setup = reset
+    ? { step: 'persons', reset: true, persons: S.hh.persons.map((p) => ({ name: p.name, color: p.color })),
+      rules: (S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), tasks: [], error: '' }
+    : { step: 'start', persons: [{ name: '', color: 'blau' }, { name: '', color: 'rosa' }], rules: [], tasks: [], error: '' };
   renderSetup();
 }
+
+const hours = (min) => (min / 60).toLocaleString('de-AT', { maximumFractionDigits: 1 });
+const setupCtx = () => ({ ...DEFAULT_HOUSEHOLD, setup: S.today, persons: [{ id: 'p1' }, { id: 'p2' }] });
 
 function renderSetup() {
   const st = S.setup;
   const err = st.error ? `<p class="ov">${esc(st.error)}</p>` : '';
   const local = S.store?.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt.</p>' : '';
+  const finish = st.reset ? 'Plan übernehmen' : 'Haushalt anlegen';
   let body = '';
   if (st.step === 'start') {
     body = `<h2>Willkommen</h2>
@@ -649,49 +694,73 @@ function renderSetup() {
       <label class="field">Haushalts-Code<input type="text" id="joinCode" class="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX"></label>
       <div class="btnrow"><button class="btn block" data-setup="join">Beitreten</button></div>${err}${local}`;
   } else if (st.step === 'persons') {
-    body = `<h2>Schritt 1 von 2 · Personen</h2>
+    body = `<h2>${st.reset ? 'Plan neu einrichten · ' : ''}Schritt 1 von 3 · Personen</h2>
       ${st.persons.map((p, i) => `<div class="setting">
         <label class="field">Name Person ${i + 1}<input type="text" data-setup-name="${i}" value="${esc(p.name)}" maxlength="30"></label>
         <div class="colors">${COLORS.map(([c, l]) => `<button data-setup-color="${i}" data-color="${c}" aria-pressed="${p.color === c}"><i class="sw" style="--pc:var(--c-${c})"></i>${l}</button>`).join('')}</div>
       </div>`).join('')}
       ${err}
-      <div class="btnrow"><button class="btn" data-setup="start">Zurück</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
+      <div class="btnrow"><button class="btn" data-setup="${st.reset ? 'cancel' : 'start'}">${st.reset ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
   } else if (st.step === 'template') {
-    body = `<h2>Schritt 2 von 2 · Vorlage</h2>
+    body = `<h2>Schritt 2 von 3 · Vorlage</h2>
       <div class="rows">
-        <button class="rowbtn" data-setup="create-template"><span>Vorschlag für 2 Personen<br><span class="meta">${TEMPLATE.length} Aufgaben (Paket A und B, halbjährlich und jährlich gemeinsam) und ein paar Abmachungen</span></span></button>
+        <button class="rowbtn" data-setup="split"><span>Vorschlag für 2 Personen<br><span class="meta">${TEMPLATE.length} Aufgaben mit geschätzter Dauer, fair aufgeteilt, und ${TEMPLATE_RULES.length} Abmachungen</span></span></button>
         <button class="rowbtn" data-setup="rules"><span>Leer starten<br><span class="meta">Aufgaben selbst anlegen, Abmachungen auswählen</span></span></button>
       </div>${err}
+      ${st.reset ? '<p class="small">Die bisherigen Aufgaben werden ersetzt. Code, Verbindung und Verlauf bleiben.</p>' : ''}
       <div class="btnrow"><button class="btn" data-setup="persons">Zurück</button></div>`;
+  } else if (st.step === 'split') {
+    const load = loadByPerson(st.tasks, setupCtx(), toDay(S.today));
+    const names = st.persons.map((p) => esc(p.name.trim()));
+    const list = (pkg) => st.tasks.map((t, i) => [t, i]).filter(([t]) => t.assign === pkg).map(([t, i]) => `
+      <button class="rowbtn" data-split="${i}"><span>${esc(t.title)}<br><span class="meta">${t.min} Min · ${intervalLabel(t)} · ${hours(monthlyMinutes(t))} h/Monat</span></span><span class="meta">tauschen</span></button>`).join('');
+    body = `<h2>Schritt 3 von 3 · Aufteilung</h2>
+      <div class="banner now">${names[0]} <strong>${hours(load.p1)} h</strong> · ${names[1]} <strong>${hours(load.p2)} h</strong> pro Monat</div>
+      <p class="small">Automatisch fair verteilt nach geschätzter Dauer × Häufigkeit. Antippen gibt eine Aufgabe der anderen Person – die Bilanz rechnet mit. Gemeinsames zählt je zur Hälfte. Die Pakete tauschen alle 2 Monate (abschaltbar), Zeiten kannst du später bei jeder Aufgabe ändern.</p>
+      <h2><i class="sw" style="--pc:var(--c-${st.persons[0].color})"></i>${names[0]}</h2><div class="rows">${list('A')}</div>
+      <h2><i class="sw" style="--pc:var(--c-${st.persons[1].color})"></i>${names[1]}</h2><div class="rows">${list('B')}</div>
+      <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und alle ${TEMPLATE_RULES.length} Abmachungen.</p>
+      ${err}
+      <div class="btnrow"><button class="btn" data-setup="template">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
   } else if (st.step === 'rules') {
-    body = `<h2>Abmachungen auswählen</h2>
+    body = `<h2>Schritt 3 von 3 · Abmachungen</h2>
       <p class="small">Selbstverständliches für jeden Tag – für beide abhakbar, nie „offen“. Später in den Optionen änderbar.</p>
       ${ruleChips(st.rules, 'data-setup-rule')}${err}
-      <div class="btnrow"><button class="btn" data-setup="template">Zurück</button><button class="btn primary" data-setup="create-empty">Haushalt anlegen</button></div>`;
+      <div class="btnrow"><button class="btn" data-setup="template">Zurück</button><button class="btn primary" data-setup="create-empty">${finish}</button></div>`;
   } else if (st.step === 'busy') {
     body = '<p class="loading">Einen Moment …</p>';
   } else if (st.step === 'created') {
     body = `<h2>Haushalt angelegt</h2>
-      <p>Dein Haushalts-Code:</p>
+      <p>Jetzt ${esc(st.persons[1].name.trim())} einladen: QR-Code mit der Handy-Kamera scannen oder den Link schicken.</p>
+      ${inviteBlock()}
+      <div class="btnrow"><button class="btn primary block" data-setup="done">Weiter</button></div>`;
+  } else if (st.step === 'joined') {
+    body = `<h2>Beigetreten</h2>
+      <p>Jetzt Fairplan auf den Home-Bildschirm legen: unten auf <strong>Teilen</strong> tippen → <strong>Zum Home-Bildschirm</strong>.</p>
+      <p class="small">Fragt die App dort nochmal nach dem Code: hier kopieren und einfügen.</p>
       <p class="code">${formatCode(S.code)}</p>
-      <p class="small">Die zweite Person öffnet Fairplan auf ihrem Gerät und tritt mit diesem Code bei. Du findest ihn jederzeit in den Einstellungen.</p>
       <div class="btnrow"><button class="btn" data-action="copy">Code kopieren</button><button class="btn primary" data-setup="done">Weiter</button></div>`;
   }
   app.innerHTML = `<header class="top">${LOGO}</header>${body}`;
+  fillQr();
 }
+
+function setupTasks(withTemplate) {
+  return withTemplate ? S.setup.tasks.map((t, i) => ({ ...t, id: newId(), created: S.today, order: i })) : [];
+}
+const setupRules = (withTemplate) => (withTemplate ? TEMPLATE_RULES : TEMPLATE_RULES.filter((r) => S.setup.rules.includes(r)));
 
 async function createHousehold(withTemplate) {
   const st = S.setup;
-  const today = localToday();
   const code = newCode();
   const doc = {
     ...DEFAULT_HOUSEHOLD,
-    setup: today,
+    setup: S.today,
     persons: st.persons.map((p, i) => ({ id: `p${i + 1}`, name: p.name.trim(), color: p.color })),
-    rules: withTemplate ? TEMPLATE_RULES : TEMPLATE_RULES.filter((r) => st.rules.includes(r)),
+    rules: setupRules(withTemplate),
     createdAt: new Date().toISOString(),
   };
-  const tasks = withTemplate ? TEMPLATE.map((t, i) => ({ ...t, id: newId(), created: today, order: i })) : [];
+  const tasks = setupTasks(withTemplate);
   st.step = 'busy'; renderSetup();
   try {
     await S.store.createHousehold(code, doc, tasks);
@@ -706,18 +775,63 @@ async function createHousehold(withTemplate) {
   renderSetup();
 }
 
-async function joinHousehold() {
+// Plan neu einrichten: Aufgaben ersetzen, Start auf heute; Code, Personen-IDs, eigene Abmachungen und Verlauf bleiben
+function resetPlan(withTemplate) {
   const st = S.setup;
-  const code = normalizeCode($('#joinCode').value);
+  const persons = S.hh.persons.map((p, i) => ({ ...p, name: st.persons[i].name.trim(), color: st.persons[i].color }));
+  for (const t of S.tasks) S.store.deleteTask(S.code, t.id);
+  for (const t of setupTasks(withTemplate)) S.store.saveTask(S.code, t);
+  updateHH({ persons, rules: [...setupRules(withTemplate), ...ownRules()], setup: S.today, swapped: false });
+  S.setup = null;
+  S.view = 'heute';
+  window.scrollTo(0, 0);
+  render();
+  snack('Plan neu eingerichtet.');
+}
+
+// ---------- Einladung ----------
+
+const inviteLink = () => `${location.origin}${location.pathname}?join=${S.code}`;
+const inviteBlock = () => `<div class="qr" id="qr" aria-label="QR-Code zum Beitreten"></div>
+  <div class="btnrow">${navigator.share ? '<button class="btn" data-action="share">Link teilen</button>' : ''}<button class="btn" data-action="copy-link">Link kopieren</button></div>
+  <p class="small">Oder in Fairplan unter „Beitreten“ den Code eingeben: <span class="code">${formatCode(S.code)}</span></p>`;
+
+// QR-Bibliothek erst bei Bedarf laden
+let qrLib;
+function fillQr() {
+  const el = $('#qr');
+  if (!el || el.firstChild) return;
+  qrLib ||= new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = 'js/qrcode.js';
+    sc.onload = () => resolve(window.qrcode);
+    sc.onerror = () => { qrLib = null; reject(); };
+    document.head.append(sc);
+  });
+  qrLib.then((qrcode) => {
+    const q = qrcode(0, 'M');
+    q.addData(inviteLink());
+    q.make();
+    el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  }).catch(() => { el.textContent = 'QR-Code gerade nicht verfügbar (offline?).'; });
+}
+
+async function joinHousehold(fromLink) {
+  const st = S.setup;
+  const code = normalizeCode(fromLink || $('#joinCode').value);
   if (code.length !== 16) { st.error = 'Der Code hat 16 Zeichen.'; return renderSetup(); }
   st.step = 'busy'; renderSetup();
   let hh = null;
   try { hh = await S.store.getHousehold(code); } catch (e) { console.error(e); }
   if (!hh) { Object.assign(st, { step: 'start', error: 'Kein Haushalt mit diesem Code gefunden (oder offline).' }); return renderSetup(); }
   ls.set('code', code);
+  S.code = code;
+  // im Browser (nicht vom Home-Bildschirm) beigetreten: Hinweis, die App noch abzulegen
+  if (fromLink && !standalone()) { st.step = 'joined'; return renderSetup(); }
   S.setup = null;
   connect(code);
 }
+const standalone = () => navigator.standalone || matchMedia('(display-mode: standalone)').matches;
 
 // ---------- Aktionen ----------
 
@@ -726,6 +840,22 @@ function setTheme(t) {
   document.documentElement.dataset.theme = t;
   $('meta[name="theme-color"]').content = t === 'light' ? '#ffffff' : '#111214';
   ls.set('theme', t);
+}
+
+// Kurzes Vibrieren: Android über navigator.vibrate, iPhone (Safari 17.4+) über einen versteckten Schalter
+const canHaptic = 'vibrate' in navigator || 'switch' in HTMLInputElement.prototype;
+function haptic() {
+  if (ls.get('vibrate') === '0') return;
+  if (navigator.vibrate) { navigator.vibrate(10); return; }
+  if (!canHaptic) return;
+  let l = $('#haptic');
+  if (!l) {
+    l = document.createElement('label');
+    l.id = 'haptic';
+    l.innerHTML = '<input type="checkbox" switch>';
+    document.body.append(l);
+  }
+  l.click();
 }
 
 let snackTimer;
@@ -755,7 +885,7 @@ function toggle(input) {
     const slide = S.view === 'heute';
     if (slide) setTimeout(() => row.classList.add('leaving'), 350);
     setTimeout(() => S.store.setCompletion(S.code, id, data), slide ? 600 : 350);
-    navigator.vibrate?.(10);
+    haptic();
     const proxy = it.owner && it.owner !== S.me ? ` für ${esc(person(it.owner).name)}` : '';
     snack(`Erledigt${proxy}.`, () => S.store.removeCompletion(S.code, id));
   } else {
@@ -773,12 +903,92 @@ function toggleRule(input) {
       taskId: ruleId(title), title, key: ruleKey(), slot: null, forPerson: null,
       by: S.me, at: new Date().toISOString(), day: S.today, rule: true,
     });
-    navigator.vibrate?.(10);
+    haptic();
     snack('Erledigt.', () => S.store.removeCompletion(S.code, id));
   } else {
     const prev = S.comps.get(id);
     S.store.removeCompletion(S.code, id);
     snack('Wieder offen.', prev ? () => S.store.setCompletion(S.code, id, prev) : null);
+  }
+}
+
+// ---------- Backup ----------
+
+async function exportData() {
+  try {
+    const data = { app: 'fairplan', version: 1, exportedAt: new Date().toISOString(), ...(await S.store.exportAll(S.code)) };
+    const name = `fairplan-backup-${S.today}.json`;
+    const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
+    const file = new File([blob], name, { type: 'application/json' });
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: name });
+    } else {
+      const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+  } catch (e) {
+    if (e?.name !== 'AbortError') { console.error(e); snack('Export fehlgeschlagen (offline?).'); }
+  }
+}
+
+async function importFile(input) {
+  const file = input.files[0];
+  input.value = '';
+  if (!file) return;
+  let data;
+  try { data = JSON.parse(await file.text()); } catch { data = null; }
+  if (data?.app !== 'fairplan' || !data.household || !Array.isArray(data.tasks) || !Array.isArray(data.completions)) {
+    return snack('Das ist keine Fairplan-Sicherung.');
+  }
+  const when = data.exportedAt ? fmtLong(data.exportedAt.slice(0, 10)) : '?';
+  if (!confirm(`Sicherung vom ${when} einspielen? Die Aufgaben werden durch die aus der Datei ersetzt.`)) return;
+  try {
+    await S.store.importAll(S.code, data);
+    snack('Sicherung eingespielt.');
+  } catch (e) {
+    console.error(e);
+    snack('Einspielen fehlgeschlagen (offline?).');
+  }
+}
+
+// ---------- Teilschritte ----------
+
+// Erledigung eines Teilschritts: eigene Kennung, gleicher Perioden-Schlüssel wie die Aufgabe (wird mitgeladen)
+const stepId = (it, i) => `${completionId(it.task.id, it.key, it.slot)}__s${i}`;
+const stepsDone = (it) => (it.task.steps || []).filter((_, i) => S.comps.has(stepId(it, i))).length;
+
+function stepsBlock(it) {
+  const steps = it.task.steps || [];
+  if (!steps.length || it.status === 'done' || !it.key) return '';
+  const key = `st-${it.task.id}-${it.slot ?? ''}`;
+  return `<details class="steps" data-fold="${key}" ${S.open[key] ? 'open' : ''}><summary>Teilschritte ${stepsDone(it)}/${steps.length}</summary>
+    ${steps.map((st, i) => `<label class="step"><input type="checkbox" data-action="toggle-step" data-task="${esc(it.task.id)}" data-slot="${esc(it.slot ?? '')}"
+      data-step="${i}" ${S.comps.has(stepId(it, i)) ? 'checked' : ''}><span class="box"></span><span>${esc(st)}</span></label>`).join('')}</details>`;
+}
+
+function toggleStep(input) {
+  const task = S.tasks.find((t) => t.id === input.dataset.task);
+  const slot = input.dataset.slot || null;
+  const it = task && evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
+  if (!it?.key) return;
+  const i = +input.dataset.step;
+  const id = stepId(it, i);
+  if (!input.checked) { S.store.removeCompletion(S.code, id); return; }
+  haptic();
+  S.store.setCompletion(S.code, id, {
+    taskId: task.id, title: `${task.title}: ${task.steps[i]}`, key: it.key, slot, step: i, forPerson: it.owner,
+    by: S.me, at: new Date().toISOString(), day: S.today,
+  });
+  // alle Teilschritte erledigt → Aufgabe erledigt
+  const all = task.steps.every((_, j) => j === i || S.comps.has(stepId(it, j)));
+  if (all) {
+    const main = completionId(task.id, it.key, slot);
+    S.store.setCompletion(S.code, main, {
+      taskId: task.id, title: task.title, key: it.key, slot, forPerson: it.owner,
+      by: S.me, at: new Date().toISOString(), day: S.today,
+    });
+    snack('Alle Teilschritte erledigt – Aufgabe erledigt.', () => S.store.removeCompletion(S.code, main));
   }
 }
 
@@ -798,6 +1008,7 @@ app.addEventListener('click', (e) => {
     S.view = d.view; window.scrollTo(0, 0); return render();
   }
   if (d.filter) { S.filter = d.filter; return render(); }
+  if (d.kindFilter) { S.kindFilter = d.kindFilter; return render(); }
   if (d.awayClear) return updateHH({ away: { ...(S.hh.away || {}), [d.awayClear]: {} } });
   if (d.calDay) { S.calDay = d.calDay; S.panelAnim = true; render(); S.panelAnim = false; return; }
   if (el.matches('[data-cal-close]')) { S.calDay = null; return render(); }
@@ -817,6 +1028,11 @@ app.addEventListener('click', (e) => {
   }
   if (d.setupColor) { S.setup.persons[+d.setupColor].color = d.color; return renderSetup(); }
   if (d.setupRule) { S.setup.rules = toggled(S.setup.rules, d.setupRule); return renderSetup(); }
+  if (d.split) {
+    const t = S.setup.tasks[+d.split];
+    t.assign = t.assign === 'A' ? 'B' : 'A';
+    return renderSetup();
+  }
   if (d.ruleSuggest) {
     // vorgeschlagene Abmachungen in Vorschlagsreihenfolge vorne, eigene dahinter
     const picked = toggled((S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), d.ruleSuggest);
@@ -825,6 +1041,15 @@ app.addEventListener('click', (e) => {
   if (d.setup) return setupAction(d.setup);
   switch (d.action) {
     case 'copy': return copyCode();
+    case 'copy-link':
+      navigator.clipboard?.writeText(inviteLink()).then(() => snack('Link kopiert.'), () => snack(inviteLink()));
+      return;
+    case 'share':
+      navigator.share({ title: 'Fairplan', text: 'Tritt unserem Putzplan bei:', url: inviteLink() }).catch(() => {});
+      return;
+    case 'reset-plan': window.scrollTo(0, 0); return startSetup(true);
+    case 'export': return exportData();
+    case 'import': $('#importFile').click(); return;
     case 'badge':
       Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});
       return;
@@ -841,13 +1066,19 @@ function setupAction(a) {
   if (a === 'new' || a === 'persons') st.step = 'persons';
   else if (a === 'start') st.step = 'start';
   else if (a === 'rules') st.step = 'rules';
-  else if (a === 'template') {
+  else if (a === 'split') {
+    if (!st.tasks.length) st.tasks = autoSplit(TEMPLATE);
+    st.step = 'split';
+  } else if (a === 'template') {
     if (st.persons.some((p) => !p.name.trim())) st.error = 'Bitte beide Namen eingeben.';
     else st.step = 'template';
-  } else if (a === 'create-template') return createHousehold(true);
-  else if (a === 'create-empty') return createHousehold(false);
-  else if (a === 'join') return joinHousehold();
+  } else if (a === 'create-template' || a === 'create-empty') {
+    const tpl = a === 'create-template';
+    return st.reset ? resetPlan(tpl) : createHousehold(tpl);
+  } else if (a === 'join') return joinHousehold();
+  else if (a === 'cancel') { S.setup = null; return render(); }
   else if (a === 'done') { S.setup = null; connect(S.code); return; }
+  window.scrollTo(0, 0);
   renderSetup();
 }
 
@@ -857,6 +1088,10 @@ app.addEventListener('change', (e) => {
   if (d.action === 'toggle') return toggle(el);
   if (d.action === 'toggle-rule') return toggleRule(el);
   if (d.action === 'plan') { ls.set('plan', el.checked ? '1' : null); return render(); }
+  if (d.action === 'toggle-step') return toggleStep(el);
+  if (d.switch === 'rotation') return updateHH({ rotationOff: !el.checked });
+  if (d.switch === 'vibrate') { ls.set('vibrate', el.checked ? null : '0'); if (el.checked) haptic(); return; }
+  if (el.id === 'importFile') return importFile(el);
   if (d.personName !== undefined) {
     const name = el.value.trim();
     if (!name) return render();
@@ -947,15 +1182,18 @@ function openEditor(id) {
     <header class="top"><h1>${isNew ? 'Neue Aufgabe' : 'Aufgabe bearbeiten'}</h1></header>
     <label class="field">Titel<input type="text" name="title" value="${esc(t.title)}" maxlength="120"></label>
     <label class="field">Hinweis (optional)<input type="text" name="note" value="${esc(t.note)}" maxlength="200"></label>
+    <label class="field">Dauer in Minuten (geschätzt, für die faire Aufteilung)<input type="number" name="min" min="0" max="999" inputmode="numeric" value="${t.min ?? ''}"></label>
     <label class="field">Intervall<select name="kind">${KINDS.map((k) => opt(k, k === 'custom' ? 'Eigenes: alle X Tage/Wochen/Monate' : KIND_LABEL[k], kind)).join('')}</select></label>
     <div class="inline" data-custom><span>alle</span><input type="number" name="n" min="1" max="999" value="${t.n}" inputmode="numeric">
       <select name="unit">${Object.entries(UNIT_LABEL).map(([u, l]) => opt(u, l[1], t.unit)).join('')}</select></div>
     <label class="field" data-day>Tag<select name="wd">${opt('', 'Egal – die ganze Woche', t.wd ?? '')}${WEEKDAYS_LONG.map((w, i) => opt(i, `am ${w}`, t.wd ?? '')).join('')}</select></label>
     <label class="field" data-wk>Welche Woche<select name="wk">${opt(0, 'A', t.wk ? 1 : 0)}${opt(1, 'B', t.wk ? 1 : 0)}</select></label>
+    <label class="field" data-permonth>Ca. wie oft pro Monat?<input type="number" name="perMonth" min="0" max="99" step="0.5" inputmode="decimal" value="${t.perMonth ?? ''}"></label>
     <p class="small" data-next></p>
     <label class="field">Zuteilung<select name="assign">${Object.entries(ASSIGN_LABEL).map(([v, l]) => opt(v, v === 'A' || v === 'B' ? `${l} (rotiert)` : v === 'shared' ? `${l} (jede/r darf abhaken)` : v === 'alternate' ? `${l} (jede Periode die andere Person)` : l, t.assign)).join('')}</select></label>
     <label class="cb"><input type="checkbox" name="hasSeason" ${t.season ? 'checked' : ''}> Nur in einer Saison</label>
     <div class="inline" data-season><select name="from">${months(t.season?.from ?? 3)}</select><span>bis</span><select name="to">${months(t.season?.to ?? 10)}</select></div>
+    <label class="field">Teilschritte (optional, einer pro Zeile)<textarea name="steps" rows="3" placeholder="WC&#10;Waschbecken&#10;Dusche">${esc((t.steps || []).join('\n'))}</textarea></label>
     <p class="small" data-hint></p>
     <p class="ov" data-error></p>
     <div class="btnrow"><button type="submit" class="btn primary">Speichern</button><button type="button" class="btn" data-close>Abbrechen</button></div>
@@ -992,6 +1230,7 @@ function openEditor(id) {
     const next = upcoming(draft(), 3).map((w) => (w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)}–${fmtWd(w.end)}`));
     $('[data-next]', form).textContent = next.length && k !== 'daily' ? `Nächste Termine: ${next.join(' · ')}` : '';
     $('[data-custom]', form).hidden = k !== 'custom';
+    $('[data-permonth]', form).hidden = k !== 'asneeded';
     $('[data-season]', form).hidden = !f.hasSeason.checked;
     $('[data-hint]', form).textContent = k === 'asneeded'
       ? 'Bei Bedarf: kein fixer Rhythmus, nie „nicht geschafft“. Einfach abhaken, wenn erledigt – zählt trotzdem im Verlauf und Kalender.'
@@ -1032,6 +1271,9 @@ function openEditor(id) {
       wk: k === 'biweekly' ? +f.wk.value : 0,
       created: t.created || S.today,
       order: t.order ?? Math.max(-1, ...S.tasks.map((x) => x.order ?? 0)) + 1,
+      min: f.min.value === '' ? null : Math.max(0, Math.min(999, parseInt(f.min.value, 10) || 0)),
+      perMonth: k === 'asneeded' && f.perMonth.value !== '' ? Math.max(0, Math.min(99, parseFloat(f.perMonth.value) || 0)) : null,
+      steps: f.steps.value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 20),
     };
     S.store.saveTask(S.code, task);
     closeEditor();

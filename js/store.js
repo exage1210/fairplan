@@ -85,6 +85,26 @@ async function openFirestore() {
     updateHousehold: (code, patch) => write(fs.updateDoc(hh(code), patch)),
     saveTask: (code, task) => write(fs.setDoc(fs.doc(col(code, 'tasks'), task.id), task)),
     deleteTask: (code, id) => write(fs.deleteDoc(fs.doc(col(code, 'tasks'), id))),
+    // Backup: alles lesen bzw. zurückschreiben (Aufgaben werden ersetzt, Erledigungen ergänzt)
+    async exportAll(code) {
+      const [h, t, c] = await Promise.all([fs.getDoc(hh(code)), fs.getDocs(col(code, 'tasks')), fs.getDocs(col(code, 'completions'))]);
+      const list = (snap) => snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+      return { household: h.data(), tasks: list(t), completions: list(c) };
+    },
+    async importAll(code, { household, tasks, completions }) {
+      const old = await fs.getDocs(col(code, 'tasks'));
+      const ops = [
+        ...old.docs.filter((d) => !tasks.some((t) => t.id === d.id)).map((d) => (b) => b.delete(d.ref)),
+        (b) => b.set(hh(code), household),
+        ...tasks.map((t) => (b) => b.set(fs.doc(col(code, 'tasks'), t.id), t)),
+        ...completions.map(({ id, ...c }) => (b) => b.set(fs.doc(col(code, 'completions'), id), c)),
+      ];
+      for (let i = 0; i < ops.length; i += 400) {
+        const batch = fs.writeBatch(db);
+        ops.slice(i, i + 400).forEach((op) => op(batch));
+        await batch.commit();
+      }
+    },
     setCompletion: (code, id, data) => write(fs.setDoc(fs.doc(col(code, 'completions'), id), data)),
     removeCompletion: (code, id) => write(fs.deleteDoc(fs.doc(col(code, 'completions'), id))),
   };
@@ -130,6 +150,18 @@ function openLocal() {
     updateHousehold(code, patch) { Object.assign(h(code).doc, clone(patch)); save(); },
     saveTask(code, task) { h(code).tasks[task.id] = clone(task); save(); },
     deleteTask(code, id) { delete h(code).tasks[id]; save(); },
+    async exportAll(code) {
+      const d = clone(h(code));
+      return { household: d.doc, tasks: Object.values(d.tasks), completions: Object.entries(d.completions).map(([id, c]) => ({ ...c, id })) };
+    },
+    async importAll(code, { household, tasks, completions }) {
+      data[code] = {
+        doc: clone(household),
+        tasks: Object.fromEntries(tasks.map((t) => [t.id, clone(t)])),
+        completions: { ...h(code).completions, ...Object.fromEntries(completions.map(({ id, ...c }) => [id, clone(c)])) },
+      };
+      save();
+    },
     setCompletion(code, id, c) { h(code).completions[id] = clone(c); save(); },
     removeCompletion(code, id) { delete h(code).completions[id]; save(); },
   };
