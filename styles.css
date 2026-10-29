@@ -172,6 +172,7 @@ details.fold > .group:first-of-type { margin-top: 4px; }
 .cal-grid .day.out { color: var(--fg-2); opacity: 0.5; }
 .cal-grid .day.today span:first-child { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 .cal-grid .day.sel { border-color: var(--fg-2); }
+.cal-grid .day.holiday span:first-child { padding: 0 4px; border-radius: 2px; box-shadow: inset 0 0 0 1px var(--fg-2); }
 .cal-grid .dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px; padding: 0 3px; min-height: 6px; }
 .cal-grid .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--pc); }
 .cal-grid .dots i.plan { background: none; box-shadow: inset 0 0 0 1.5px var(--pc); }
@@ -328,3 +329,13 @@ details.steps:not([open]) > summary::after { content: " ▸"; }
 
 /* Vibrier-Schalter fürs iPhone: unsichtbar, aber klickbar */
 #haptic { position: fixed; left: -100px; top: 0; opacity: 0; pointer-events: none; }
+
+/* Auswahl in der Einrichtung: große, klar antippbare Flächen */
+button.choice {
+  display: block; width: 100%; margin: 10px 0 0; padding: 16px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--surface); color: var(--fg); font: inherit;
+}
+button.choice strong { display: block; font-size: 17px; font-weight: 600; }
+button.choice span { display: block; margin-top: 4px; font-size: 13px; color: var(--fg-2); }
+button.choice:active { background: var(--surface-2); }
+.filters.days button { min-width: 42px; padding: 0 10px; }
