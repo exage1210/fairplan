@@ -563,7 +563,6 @@ function dayPanel(sel, wins, doneOn, holiday) {
 
 function viewSettings() {
   const hh = S.hh;
-  const opt = (v, l, cur) => `<option value="${v}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(l)}</option>`;
   const load = loadByPerson(S.tasks, hh);
 
   const persons = hh.persons.map((p, i) => `<div class="setting">
@@ -576,74 +575,78 @@ function viewSettings() {
       <button class="rowbtn" data-edit="${esc(t.id)}"><span>${esc(t.title)}<br><span class="meta">${intervalLabel(t)} · ${assignLabel(t.assign)}${t.min ? ` · ${t.min} Min` : ''}${t.season ? ` · Saison ${seasonLabel(t.season)}` : ''}</span></span><span class="meta">Bearbeiten</span></button>`).join('')
     : '<p class="muted">Noch keine Aufgaben.</p>';
 
-  return `
-    <h2>Zahl am App-Icon</h2>
-    <p class="small">Zeigt, was bei dir nicht geschafft oder jetzt dran ist (ohne Tägliches).</p>
-    ${badgeSetting()}
+  const away = hh.persons.map((p) => {
+    const a = hh.away?.[p.id] || {};
+    return `<div class="setting"><p>${pn(p.id)}</p>
+      <div class="inline"><label class="field">von<input type="date" data-away-from="${p.id}" value="${esc(a.from || '')}"></label>
+        <label class="field">bis<input type="date" data-away-to="${p.id}" value="${esc(a.to || '')}"></label></div>
+      ${a.from || a.to ? `<button class="btn" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}</div>`;
+  }).join('');
 
-    <h2>Dieses Gerät</h2>
-    <p class="small">Ich bin</p>
-    <div class="btnrow">${hh.persons.map((p) => `<button class="btn" data-me="${p.id}" aria-pressed="${S.me === p.id}">${esc(p.name)}</button>`).join('')}</div>
-    <p class="small">Darstellung</p>
-    <div class="btnrow">
-      <button class="btn" data-theme-set="dark" aria-pressed="${theme() === 'dark'}">Dunkel</button>
-      <button class="btn" data-theme-set="light" aria-pressed="${theme() === 'light'}">Hell</button>
-    </div>
-
-    <h2>Haushalt</h2>
-    <p class="small">Einladen: QR-Code mit der Handy-Kamera scannen oder Link schicken. Nicht öffentlich teilen.</p>
-    ${fold('invite', 'Einladen (QR-Code, Link)', inviteBlock())}
-    <div class="btnrow"><button class="btn" data-action="copy">Code kopieren</button></div>
-    ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}
-
+  const wir = `
     <h2>Personen</h2>
     ${persons}
-
     <h2>Putztage</h2>
     <p class="small">An diesen Tagen sind die Aufgaben der jeweiligen Person dran. Gemeinsames am gemeinsamen Putztag.</p>
     ${hh.persons.map((p, i) => `<div class="setting"><p>${pn(p.id)}${p.id === S.me ? ' (du)' : ''}</p>${dayChips(p.days?.length ? p.days : [5], `data-person-day="${i}"`)}</div>`).join('')}
     <div class="setting"><p>Gemeinsam</p>${dayChips(hh.sharedDays?.length ? hh.sharedDays : [5], 'data-shared-day')}</div>
-
     <h2>Abwesend (Urlaub, krank)</h2>
-    <p class="small">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „nicht geschafft“. Gemeinsames pausiert nur, wenn beide weg sind.</p>
-    ${hh.persons.map((p) => {
-      const a = hh.away?.[p.id] || {};
-      return `<div class="setting"><p>${pn(p.id)}</p>
-        <div class="inline"><label class="field">von<input type="date" data-away-from="${p.id}" value="${esc(a.from || '')}"></label>
-          <label class="field">bis<input type="date" data-away-to="${p.id}" value="${esc(a.to || '')}"></label></div>
-        ${a.from || a.to ? `<button class="btn" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}</div>`;
-    }).join('')}
+    <p class="small">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn beide weg sind.</p>
+    ${away}`;
 
-    <h2>Unsere Abmachungen</h2>
-    <p class="small">Selbstverständliches für jeden Tag. Steht bei „Aktuell“ unter „Heute“: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für beide ab. Wird nie als offen angezeigt, zählt aber in Bilanz und Verlauf. Vorschläge antippen zum Auswählen, eigene unten eintragen (eine pro Zeile).</p>
-    ${ruleChips(hh.rules || [], 'data-rule-suggest')}
-    <label class="field">Eigene Abmachungen<textarea data-rules rows="4" placeholder="Pflanzen am Fensterbrett gießen&#10;Post reinholen">${esc(ownRules().join('\n'))}</textarea></label>
-
-    <h2>Aufgaben</h2>
+  const aufgaben = `
     <p class="small">Aufwand pro Monat (Dauer × Häufigkeit, Gemeinsames je zur Hälfte): ${hh.persons.map((p) => `${byName(p.id)} ${hours(load[p.id])} h`).join(' · ')}</p>
     <div class="btnrow"><button class="btn block" data-edit="">Aufgabe hinzufügen</button></div>
     <div class="rows">${tasks}</div>
-
+    <h2>Unsere Abmachungen</h2>
+    <p class="small">Selbstverständliches für jeden Tag. Steht bei „Aktuell“ ganz oben: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für beide ab. Wird nie als offen angezeigt, zählt aber in Bilanz und Verlauf. Vorschläge antippen zum Auswählen, eigene unten eintragen (eine pro Zeile).</p>
+    ${ruleChips(hh.rules || [], 'data-rule-suggest')}
+    <label class="field">Eigene Abmachungen<textarea data-rules rows="4" placeholder="Pflanzen am Fensterbrett gießen&#10;Post reinholen">${esc(ownRules().join('\n'))}</textarea></label>
     <h2>Plan neu einrichten</h2>
     <p class="small">Aufgaben neu aus der Vorlage (fair aufgeteilt) oder leer aufbauen. Code, Verbindung zur anderen Person und Verlauf bleiben, gezählt wird ab heute.</p>
-    <div class="btnrow"><button class="btn block" data-action="reset-plan">Plan neu einrichten</button></div>
+    <div class="btnrow"><button class="btn block" data-action="reset-plan">Plan neu einrichten</button></div>`;
 
+  const geraet = `
+    <h2>Ich bin</h2>
+    <div class="btnrow">${hh.persons.map((p) => `<button class="btn" data-me="${p.id}" aria-pressed="${S.me === p.id}">${esc(p.name)}</button>`).join('')}</div>
+    <h2>Zahl am App-Icon</h2>
+    <p class="small">Zeigt, was bei dir vergessen oder jetzt dran ist (ohne Tägliches).</p>
+    ${badgeSetting()}
     ${canHaptic ? `<h2>Vibrieren</h2>
     ${switchRow('vibrate', ls.get('vibrate') !== '0', 'Beim Abhaken kurz vibrieren', 'Gilt nur für dieses Gerät.')}` : ''}
+    <h2>Darstellung</h2>
+    <div class="btnrow">
+      <button class="btn" data-theme-set="dark" aria-pressed="${theme() === 'dark'}">Dunkel</button>
+      <button class="btn" data-theme-set="light" aria-pressed="${theme() === 'light'}">Hell</button>
+    </div>`;
 
+  const haushalt = `
+    <h2>Einladen</h2>
+    <p class="small">QR-Code mit der Handy-Kamera scannen oder Link schicken. Nicht öffentlich teilen.</p>
+    ${fold('invite', 'QR-Code und Link', inviteBlock())}
+    <div class="btnrow"><button class="btn" data-action="copy">Code kopieren</button></div>
+    ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}
     <h2>Backup</h2>
     <p class="small">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt die Aufgaben durch die aus der Datei.</p>
     <div class="btnrow"><button class="btn" data-action="export">Daten exportieren</button><button class="btn" data-action="import">Daten importieren</button></div>
     <input type="file" id="importFile" accept=".json,application/json" hidden>
-
     <h2>Start des Plans</h2>
     <label class="field">Ab diesem Tag zählen die Termine<input type="date" data-start value="${esc(hh.setup)}"></label>
     <p class="small">Davor ist nichts „vergessen“. Wird beim Einrichten automatisch gesetzt. Ändern, wenn ihr erst später loslegen wollt (z. B. nach einem Urlaub oder Umzug) oder neu zu zählen beginnen wollt, ohne den Plan neu einzurichten. Auch der 2-Wochen-Rhythmus zählt ab hier.</p>
-
     <h2>Abmelden</h2>
     <p class="small">Entfernt den Haushalt nur von diesem Gerät. Mit dem Code kannst du wieder beitreten.</p>
     <div class="btnrow"><button class="btn danger" data-action="leave">Auf diesem Gerät abmelden</button></div>`;
+
+  return `
+    ${optGroup('opt-wir', 'Wir', 'Personen, Putztage, Abwesenheit', wir)}
+    ${optGroup('opt-tasks', 'Aufgaben', 'Liste, Abmachungen, Plan neu einrichten', aufgaben)}
+    ${optGroup('opt-device', 'Dieses Gerät', 'Ich bin, Zahl am Icon, Vibrieren, Darstellung', geraet)}
+    ${optGroup('opt-hh', 'Haushalt', 'Einladen, Backup, Start, Abmelden', haushalt)}`;
 }
+
+// Gruppe in den Optionen: große, aufklappbare Fläche mit kurzer Inhaltsangabe
+const optGroup = (key, title, hint, body) => `<details class="fold opt" data-fold="${key}" ${S.open[key] ? 'open' : ''}>
+  <summary><span><strong>${title}</strong><span class="small">${hint}</span></span></summary><div class="opt-body">${body}</div></details>`;
 
 function renderWhoAmI() {
   app.innerHTML = `<header class="top">${LOGO}</header>
@@ -1184,19 +1187,22 @@ function openEditor(id) {
   sheet.innerHTML = `<form id="taskForm" novalidate>
     <header class="top"><h1>${isNew ? 'Neue Aufgabe' : 'Aufgabe bearbeiten'}</h1></header>
     <label class="field">Titel<input type="text" name="title" value="${esc(t.title)}" maxlength="120"></label>
-    <label class="field">Hinweis (optional)<input type="text" name="note" value="${esc(t.note)}" maxlength="200"></label>
-    <label class="field">Dauer in Minuten (geschätzt, für die faire Aufteilung)<input type="number" name="min" min="0" max="999" inputmode="numeric" value="${t.min ?? ''}"></label>
-    <label class="field">Intervall<select name="kind">${KINDS.map((k) => opt(k, k === 'custom' ? 'Eigenes: alle X Tage/Wochen/Monate' : KIND_LABEL[k], kind)).join('')}</select></label>
+    <label class="field">Intervall<select name="kind">${KINDS.filter((k) => k !== 'custom' || kind === 'custom').map((k) => opt(k, k === 'custom' ? `Eigenes: alle ${t.n} ${UNIT_LABEL[t.unit]?.[1] ?? ''}` : KIND_LABEL[k], kind)).join('')}</select></label>
     <div class="inline" data-custom><span>alle</span><input type="number" name="n" min="1" max="999" value="${t.n}" inputmode="numeric">
       <select name="unit">${Object.entries(UNIT_LABEL).map(([u, l]) => opt(u, l[1], t.unit)).join('')}</select></div>
-    <label class="field" data-day>Tag<select name="day">${opt('', 'An den Putztagen der zuständigen Person', t.day ?? '')}${WEEKDAYS_LONG.map((w, i) => opt(i, `Fest am ${w}`, t.day ?? '')).join('')}</select></label>
-    <label class="field" data-pos>Termin<select name="pos"></select></label>
     <label class="field" data-permonth>Ca. wie oft pro Monat?<input type="number" name="perMonth" min="0" max="99" step="0.5" inputmode="decimal" value="${t.perMonth ?? ''}"></label>
+    <label class="field">Zuteilung<select name="assign">${Object.keys(ASSIGN_LABEL).filter((v) => v !== 'alternate' || t.assign === 'alternate').map((v) => opt(v, v === 'shared' ? 'Gemeinsam (jede/r darf abhaken)' : v === 'alternate' ? 'Abwechselnd (jedes Mal die andere Person)' : v === 'each' ? 'Pro Person (jede/r für sich)' : S.hh.persons[v === 'A' ? 0 : 1].name, t.assign)).join('')}</select></label>
+    <label class="field">Dauer in Minuten (geschätzt, für die faire Aufteilung)<input type="number" name="min" min="0" max="999" inputmode="numeric" value="${t.min ?? ''}"></label>
     <p class="small" data-next></p>
-    <label class="field">Zuteilung<select name="assign">${Object.keys(ASSIGN_LABEL).map((v) => opt(v, v === 'shared' ? 'Gemeinsam (jede/r darf abhaken)' : v === 'alternate' ? 'Abwechselnd (jedes Mal die andere Person)' : v === 'each' ? 'Pro Person (jede/r für sich)' : S.hh.persons[v === 'A' ? 0 : 1].name, t.assign)).join('')}</select></label>
-    <label class="cb"><input type="checkbox" name="hasSeason" ${t.season ? 'checked' : ''}> Nur in einer Saison</label>
-    <div class="inline" data-season><select name="from">${months(t.season?.from ?? 3)}</select><span>bis</span><select name="to">${months(t.season?.to ?? 10)}</select></div>
-    <label class="field">Teilschritte (optional, einer pro Zeile)<textarea name="steps" rows="3" placeholder="WC&#10;Waschbecken&#10;Dusche">${esc((t.steps || []).join('\n'))}</textarea></label>
+    <details class="more" ${t.note || t.season || t.steps?.length || Number.isInteger(t.day) ? 'open' : ''}>
+      <summary>Mehr: Tag, Termin, Saison, Hinweis, Teilschritte</summary>
+      <label class="field" data-day>Tag<select name="day">${opt('', 'An den Putztagen der zuständigen Person', t.day ?? '')}${WEEKDAYS_LONG.map((w, i) => opt(i, `Fest am ${w}`, t.day ?? '')).join('')}</select></label>
+      <label class="field" data-pos>Termin<select name="pos"></select></label>
+      <label class="cb"><input type="checkbox" name="hasSeason" ${t.season ? 'checked' : ''}> Nur in einer Saison</label>
+      <div class="inline" data-season><select name="from">${months(t.season?.from ?? 3)}</select><span>bis</span><select name="to">${months(t.season?.to ?? 10)}</select></div>
+      <label class="field">Hinweis<input type="text" name="note" value="${esc(t.note)}" maxlength="200"></label>
+      <label class="field">Teilschritte (einer pro Zeile)<textarea name="steps" rows="3" placeholder="WC&#10;Waschbecken&#10;Dusche">${esc((t.steps || []).join('\n'))}</textarea></label>
+    </details>
     <p class="small" data-hint></p>
     <p class="ov" data-error></p>
     <div class="btnrow"><button type="submit" class="btn primary">Speichern</button><button type="button" class="btn" data-close>Abbrechen</button></div>

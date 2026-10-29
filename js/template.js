@@ -1,5 +1,4 @@
 // Vorlage "Vorschlag für 2 Personen"
-const D = { n: 1, unit: 'day' };
 const W = { n: 1, unit: 'week' };
 const W2 = { n: 2, unit: 'week' };
 const M = { n: 1, unit: 'month' };
@@ -23,7 +22,7 @@ export const TEMPLATE_RULES = [
 
 export const TEMPLATE = [
   t('Müll rausbringen', N, 'shared', 5, { perMonth: 8 }),
-  t('Pflanzen kontrollieren', D, 'alternate', 3),
+  t('Pflanzen kontrollieren', W, 'A', 5),
   t('Pflanzen gießen bei Hitze', N, 'shared', 10, { perMonth: 8, ...season(6, 8) }),
 
   t('Wäsche (waschen, aufhängen, zusammenlegen)', W, 'A', 60),
@@ -66,7 +65,6 @@ export const TEMPLATE = [
   t('Töpfe/Untersetzer reinigen', H, 'shared', 30),
   t('Auto putzen', H, 'shared', 60),
   t('Lüftungsfilter im Bad', H, 'shared', 15),
-  t('Gewand ausmisten', H, 'each', 30),
 
   t('Grundreinigung Kleider-, Kinder- und Wohnzimmerschränke', Y, 'shared', 120),
   t('Großes Ausmisten', Y, 'shared', 180, { note: 'Bücher, Küche, Keller/Abstellraum, Dokumente, Elektronik' }),
