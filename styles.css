@@ -104,21 +104,23 @@ details.fold > .group:first-of-type { margin-top: 4px; }
 }
 .pn { white-space: nowrap; }
 
-/* Aufgabenzeilen: kompakt, ohne Trennlinien */
+/* Aufgaben als Kacheln: eine Spur heller als der Hintergrund, keine Linien, nur Abstand */
+.list { display: flex; flex-direction: column; gap: 3px; }
 .item {
-  display: flex; align-items: center; min-height: 44px; background: var(--bg);
+  display: flex; align-items: center; min-height: 44px; background: var(--surface);
   border-radius: var(--r); transition: transform 0.2s ease-out, opacity 0.2s;
 }
+.item.done { background: none; box-shadow: inset 0 0 0 1px var(--surface); }
 .item[data-swipe] { touch-action: pan-y; }
 .item:has(details.steps) { align-items: flex-start; }
 .item:has(details.steps) .check { align-self: flex-start; padding-top: 10px; }
-.item.dragging { transition: none; background: var(--surface); }
+.item.dragging { transition: none; background: var(--surface-2); }
 .item.checking .title { color: var(--fg-2); text-decoration: line-through; text-decoration-color: var(--fg-2); }
 .item.leaving { transform: translateX(100%); opacity: 0; transition: transform 0.25s ease-in, opacity 0.25s ease-in; }
 .item .head { display: flex; align-items: baseline; gap: 8px; }
 .item .head .title { flex: 1; min-width: 0; }
 .item .kind { flex: 0 0 auto; font-size: 12px; color: var(--fg-2); }
-.item .body { flex: 1; padding: 6px 8px 6px 0; min-width: 0; }
+.item .body { flex: 1; padding: 7px 10px 7px 0; min-width: 0; }
 .item .title { overflow-wrap: anywhere; line-height: 1.3; }
 .item .meta { font-size: 13px; line-height: 1.3; color: var(--fg-2); margin-top: 1px; }
 .item.done .title { color: var(--fg-2); text-decoration: line-through; text-decoration-color: var(--line-strong); }
@@ -128,8 +130,8 @@ details.fold > .group:first-of-type { margin-top: 4px; }
 
 /* Checkbox: Rand in der Personenfarbe, abgehakt gefüllt; Gemeinsames grau */
 .check {
-  flex: 0 0 40px; align-self: stretch; display: flex; align-items: center; justify-content: flex-start;
-  padding-left: 2px; cursor: pointer;
+  flex: 0 0 44px; align-self: stretch; display: flex; align-items: center; justify-content: flex-start;
+  padding-left: 10px; cursor: pointer;
 }
 .check input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .check .box {
@@ -145,10 +147,10 @@ details.fold > .group:first-of-type { margin-top: 4px; }
 
 /* Abschnitte */
 .group { margin-top: 20px; }
-.group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 2px; }
+.group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
 .group.late h2 { color: var(--warn); }
 .group.late .count { color: var(--warn); }
-.item .body.cal { padding-left: 2px; }
+.item .body.cal { padding-left: 10px; }
 
 /* Kalender */
 .calhead { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 8px; }
