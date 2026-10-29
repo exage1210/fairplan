@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
-  nextSwap, packageOwners, inSeason, dueDay, groupOf,
+  nextSwap, packageOwners, inSeason, dueDay, groupOf, windowsBetween, awayDuring,
+  timesPerMonth, monthlyMinutes, loadByPerson, autoSplit,
 } from '../js/logic.js';
 
 const ctx = (over = {}) => ({
@@ -72,13 +73,12 @@ test('erste Periode nach dem Anlegen gilt nicht als verpasst', () => {
   assert.equal(one(t, ctx(), '2026-11-03').status, 'due'); // Woche davor begann vor dem Anlegen
 });
 
-test('täglich: gestern verpasst → heute überfällig, ein Mal', () => {
+test('täglich: gestern verpasst verfällt, heute einfach fällig', () => {
   const t = task({ n: 1, unit: 'day', created: '2026-12-30' });
   assert.equal(one(t, ctx(), '2026-12-30').status, 'due');
   const o = one(t, ctx(), '2027-01-01');
-  assert.equal(o.status, 'overdue');
+  assert.equal(o.status, 'due');
   assert.equal(o.key, 'daily:2027-01-01');
-  assert.equal(one(t, ctx(), '2027-01-01', [['daily:2026-12-31', null]]).status, 'due');
 });
 
 test('alle 2 Wochen: gezählt ab der Einrichtungswoche, über den Jahreswechsel', () => {
@@ -226,4 +226,103 @@ test('freie Intervalle zählen ab dem Einrichtungstag', () => {
 test('relevante Schlüssel enthalten aktuelle und vorherige Periode', () => {
   const keys = relevantKeys([task(), task({ id: 'h', n: 6, unit: 'month' })], ctx(), '2027-01-05');
   assert.deepEqual(keys, ['halfyear:2026-09-01', 'weekly:2026-12-28', 'weekly:2027-01-04']);
+});
+
+test('Zeitfenster: längere Intervalle sind in der zweiten Hälfte ihrer Periode dran', () => {
+  // alle 2 Wochen: Block 26.10.–8.11., dran in der 2. Woche
+  const b = task({ n: 2 });
+  const u = one(b, ctx(), '2026-10-28');
+  assert.equal(u.status, 'upcoming');
+  assert.deepEqual([u.due, u.end], ['2026-11-02', '2026-11-08']);
+  assert.equal(one(b, ctx(), '2026-11-02').status, 'due');
+  // nicht geschafft → im nächsten Block überfällig, mit Ende des verpassten Fensters
+  const o = one(b, ctx(), '2026-11-10');
+  assert.deepEqual([o.status, o.end], ['overdue', '2026-11-08']);
+  // monatlich ab dem 15., vierteljährlich im 3. Monat
+  assert.equal(one(task({ n: 1, unit: 'month' }), ctx(), '2026-11-14').status, 'upcoming');
+  assert.equal(one(task({ n: 1, unit: 'month' }), ctx(), '2026-11-15').status, 'due');
+  assert.equal(one(task({ n: 3, unit: 'month' }), ctx(), '2026-11-30').due, '2026-12-01');
+});
+
+test('Kalender: Zeitfenster samt Zuständigkeit', () => {
+  const w = windowsBetween(task({ n: 2, assign: 'A' }), ctx(), '2026-11-01', '2026-12-31');
+  assert.deepEqual(w.map((x) => [x.start, x.end, x.owner]), [
+    ['2026-11-02', '2026-11-08', 'p1'],
+    ['2026-11-16', '2026-11-22', 'p1'],
+    ['2026-11-30', '2026-12-06', 'p1'],
+    ['2026-12-14', '2026-12-20', 'p2'],
+    ['2026-12-28', '2027-01-03', 'p2'],
+  ]);
+  // vor dem Anlegen gibt es keine Fenster
+  assert.equal(windowsBetween(task({ created: '2026-11-20' }), ctx(), '2026-11-01', '2026-11-15').length, 0);
+});
+
+test('Wochentag: wöchentlich ab Freitag, alle 2 Wochen am Mittwoch, Rhythmus versetzbar', () => {
+  const prev = [['weekly:2026-10-26', null]];
+  const w = one(task({ wd: 4 }), ctx(), '2026-11-03', prev);
+  assert.deepEqual([w.status, w.due, w.end, w.key], ['upcoming', '2026-11-06', '2026-11-08', 'weekly:2026-11-02']);
+  assert.equal(one(task({ wd: 4 }), ctx(), '2026-11-06', prev).status, 'due');
+  // Fr 30.10. nicht geschafft → ab Montag überfällig
+  const o = one(task({ wd: 4 }), ctx(), '2026-11-02');
+  assert.deepEqual([o.status, o.due, o.end], ['overdue', '2026-10-30', '2026-11-01']);
+  const b = windowsBetween(task({ n: 2, wd: 2 }), ctx(), '2026-11-01', '2026-11-30').map((x) => x.start);
+  assert.deepEqual(b, ['2026-11-04', '2026-11-18']);
+  const v = windowsBetween(task({ n: 2, wd: 2, wk: 1 }), ctx(), '2026-10-26', '2026-11-30').map((x) => x.start);
+  assert.deepEqual(v, ['2026-10-28', '2026-11-11', '2026-11-25']);
+});
+
+test('Start des Plans: nichts davor zählt, auch wenn die Aufgabe älter ist', () => {
+  const c = ctx({ setup: '2026-11-02' });
+  const t = task({ created: '2026-10-01' });
+  assert.equal(one(t, c, '2026-11-03').status, 'due'); // Woche 26.10. liegt vor dem Start → nicht überfällig
+  assert.equal(one(t, c, '2026-11-01').status, 'idle');
+});
+
+test('bei Bedarf: jeden Tag abhakbar, nie überfällig, nicht im Kalender', () => {
+  const t = task({ n: 0, unit: 'need', assign: 'B' });
+  assert.equal(kindOf(t), 'asneeded');
+  const i = one(t, ctx(), '2026-11-05');
+  assert.deepEqual([i.status, i.key, i.owner], ['need', 'need:2026-11-05', 'p2']);
+  assert.equal(one(t, ctx(), '2026-11-05', [['need:2026-11-05', null]]).status, 'done');
+  assert.equal(one(t, ctx(), '2026-11-06', [['need:2026-11-05', null]]).status, 'need');
+  assert.deepEqual(windowsBetween(t, ctx(), '2026-11-01', '2026-11-30'), []);
+  assert.ok(relevantKeys([t], ctx(), '2026-11-05').includes('need:2026-11-05'));
+});
+
+test('Abwesenheit pausiert: verpasst während Urlaub → nicht überfällig', () => {
+  const t = task({ assign: 'A', created: '2026-11-01' });
+  const away = { p1: { from: '2026-11-05', to: '2026-11-12' } };
+  assert.equal(one(t, ctx(), '2026-11-10').status, 'overdue');
+  assert.equal(one(t, ctx({ away }), '2026-11-10').status, 'due');
+  // Gemeinsames pausiert nur, wenn beide weg sind
+  const s = task({ created: '2026-11-01' });
+  assert.equal(one(s, ctx({ away }), '2026-11-10').status, 'overdue');
+  assert.equal(one(s, ctx({ away: { ...away, p2: away.p1 } }), '2026-11-10').status, 'due');
+  assert.ok(awayDuring(ctx({ away }), 'p1', toDay('2026-11-12'), toDay('2026-11-20')));
+  assert.ok(!awayDuring(ctx({ away }), 'p1', toDay('2026-11-13'), toDay('2026-11-20')));
+});
+
+test('Aufwand pro Monat: Häufigkeit × Minuten, Saison anteilig, bei Bedarf geschätzt', () => {
+  const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≠ ${b}`);
+  near(timesPerMonth(task({ n: 1, unit: 'day' })), 30);
+  near(timesPerMonth(task({ n: 1, unit: 'week' })), 4.3);
+  near(timesPerMonth(task({ n: 2, unit: 'week' })), 2.2);
+  near(timesPerMonth(task({ n: 3, unit: 'month' })), 1 / 3);
+  near(timesPerMonth(task({ n: 12, unit: 'month' })), 1 / 12);
+  near(timesPerMonth(task({ n: 0, unit: 'need', perMonth: 8 })), 8);
+  near(timesPerMonth(task({ n: 1, unit: 'month', season: { from: 11, to: 1 } })), 3 / 12);
+  near(monthlyMinutes(task({ n: 1, unit: 'week', min: 30 })), 129);
+  near(monthlyMinutes(task({ n: 1, unit: 'week' })), 0);
+});
+
+test('Faire Aufteilung: je Gruppe ausgeglichen, Gemeinsames zählt halb, Pakettausch abschaltbar', () => {
+  const w = (min, assign = 'A') => task({ n: 1, unit: 'week', min, assign });
+  const split = autoSplit([w(60), w(30), w(20), w(10), task({ n: 3, unit: 'month', min: 90, assign: 'A' }), w(40, 'shared')]);
+  assert.deepEqual(split.map((t) => t.assign), ['A', 'B', 'B', 'B', 'A', 'shared']); // 60 | 30+20+10
+  const load = loadByPerson(split, ctx(), toDay('2026-11-01'));
+  assert.ok(Math.abs(load.p1 - load.p2 - 30) < 1e-9); // Vierteljährliches (90/3) bleibt in seiner Gruppe allein bei A
+  // Pakettausch nach 2 Monaten tauscht die Last; abgeschaltet bleibt sie
+  const later = toDay('2027-01-05');
+  assert.deepEqual(packageOwners('short', ctx(), later), ['p2', 'p1']);
+  assert.deepEqual(packageOwners('short', ctx({ rotationOff: true }), later), ['p1', 'p2']);
 });
