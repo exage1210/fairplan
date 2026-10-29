@@ -234,8 +234,6 @@ input[type="text"], input[type="number"], input[type="date"], select, textarea {
   font: inherit; font-size: 16px;
 }
 textarea { padding: 10px 12px; line-height: 1.45; resize: vertical; }
-ul.rules { margin: 0 0 8px; padding: 4px 0 0 20px; }
-ul.rules li { padding: 4px 0; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--fg); outline-offset: -1px; }
 .inline { display: flex; gap: 8px; align-items: center; }
 .inline > * { flex: 1; }
