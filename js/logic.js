@@ -189,39 +189,15 @@ export function holidays(y) {
   return new Map(list.map(([d, n]) => [fromDay(d), n]));
 }
 
-// ---------- Rotation ----------
+// ---------- Zuteilung ----------
 
-export const GROUPS = ['short', 'quarter', 'half', 'year'];
-
-export function groupOf(task) {
-  const days = task.n * (task.unit === 'month' ? 30.5 : task.unit === 'week' ? 7 : 1);
-  if (days <= 31) return 'short';
-  if (days <= 92) return 'quarter';
-  if (days <= 183) return 'half';
-  return 'year';
-}
-
-// Paket-Tausch jeweils am Monatsersten, alle `rhythm` Monate ab dem Einrichtungsmonat.
-export function swapIndex(rhythm, ctx, day) {
-  return Math.floor((monthIndex(day) - monthIndex(toDay(ctx.setup))) / rhythm);
-}
-
-export function nextSwap(group, ctx, today) {
-  const r = ctx.rotation[group];
-  const mi = monthIndex(toDay(ctx.setup)) + (swapIndex(r, ctx, toDay(today)) + 1) * r;
-  return fromDay(dayOf(Math.floor(mi / 12), mod(mi, 12) + 1, 1));
-}
-
-// Wer hat Paket A/B zu einem Tag (für eine Intervallgruppe)? → [personIdA, personIdB]
-// rotationOff: Pakettausch abgeschaltet → Pakete bleiben fix (nur „Zuteilung umdrehen“ wirkt)
-export function packageOwners(group, ctx, day) {
-  const swaps = ctx.rotationOff ? 0 : mod(swapIndex(ctx.rotation[group], ctx, day), 2);
-  const flip = (swaps === 1) !== !!ctx.swapped;
+// Paket A gehört Person 1, Paket B Person 2 (fix; kein Pakettausch). swapped dreht nur um (alte Daten).
+export function packageOwners(ctx) {
   const [p1, p2] = ctx.persons.map((p) => p.id);
-  return flip ? [p2, p1] : [p1, p2];
+  return ctx.swapped ? [p2, p1] : [p1, p2];
 }
 
-// Zuständige Person für eine Periode (Pakete nach dem Stand am Periodenbeginn). null = gemeinsam.
+// Zuständige Person für eine Periode. null = gemeinsam.
 export function ownerOf(task, period, day, slot, ctx) {
   switch (task.assign) {
     case 'shared': return null;
@@ -232,7 +208,7 @@ export function ownerOf(task, period, day, slot, ctx) {
       return ctx.persons[odd !== !!ctx.swapped ? 1 : 0].id;
     }
     default: {
-      const [a, b] = packageOwners(groupOf(task), ctx, period ? period.start : day);
+      const [a, b] = packageOwners(ctx);
       return task.assign === 'A' ? a : b;
     }
   }
@@ -252,14 +228,13 @@ export function timesPerMonth(task) {
 }
 export const monthlyMinutes = (task) => (Number(task.min) || 0) * timesPerMonth(task);
 
-// Aufwand pro Person und Monat (Minuten) zu einem Tag: Pakete nach aktueller Zuteilung,
-// Gemeinsames und Abwechselndes je zur Hälfte, „pro Person“ voll.
-export function loadByPerson(tasks, ctx, day) {
+// Aufwand pro Person und Monat (Minuten): Pakete A/B, Gemeinsames und Abwechselndes je zur Hälfte, „pro Person“ voll.
+export function loadByPerson(tasks, ctx) {
   const out = Object.fromEntries(ctx.persons.map((p) => [p.id, 0]));
   for (const t of tasks) {
     const m = monthlyMinutes(t);
     if (t.assign === 'A' || t.assign === 'B') {
-      const [a, b] = packageOwners(groupOf(t), ctx, day);
+      const [a, b] = packageOwners(ctx);
       out[t.assign === 'A' ? a : b] += m;
     } else {
       for (const id in out) out[id] += t.assign === 'each' ? m : m / ctx.persons.length;
@@ -268,19 +243,49 @@ export function loadByPerson(tasks, ctx, day) {
   return out;
 }
 
-// Pakete A/B fair aufteilen: je Intervallgruppe (die getrennt rotieren) nach Aufwand absteigend,
-// jede Aufgabe kommt ins Paket mit bisher weniger Aufwand. Andere Zuteilungen bleiben unverändert.
+// Pakete A/B fair aufteilen – je Intervall für sich: beide bekommen gleich viele Aufgaben (±1) und
+// möglichst gleich viel Aufwand (alle Varianten durchprobiert, bei bis zu 16 Aufgaben pro Intervall).
+// Danach bekommt die Person mit bisher weniger Gesamtaufwand jeweils die größere Hälfte.
+// Gemeinsames, Abwechselndes und „pro Person“ bleiben unverändert.
 export function autoSplit(tasks) {
-  const sum = {};
-  const order = tasks.map((t, i) => [t, i])
-    .filter(([t]) => t.assign === 'A' || t.assign === 'B')
-    .sort(([a, i], [b, j]) => monthlyMinutes(b) - monthlyMinutes(a) || i - j);
+  const groups = new Map();
+  tasks.forEach((t, i) => {
+    if (t.assign !== 'A' && t.assign !== 'B') return;
+    const g = `${t.n}${t.unit}`;
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(i);
+  });
+  const halves = [...groups.values()].map((idx) => {
+    const m = idx.map((i) => monthlyMinutes(tasks[i]));
+    const total = m.reduce((a, b) => a + b, 0);
+    let best = null;
+    if (idx.length <= 16) {
+      for (let mask = 0; mask < 1 << idx.length; mask++) {
+        let n = 0, sum = 0;
+        for (let k = 0; k < idx.length; k++) if (mask & (1 << k)) { n++; sum += m[k]; }
+        if (Math.abs(2 * n - idx.length) > 1) continue;
+        const diff = Math.abs(2 * sum - total);
+        if (!best || diff < best.diff - 1e-9) best = { diff, mask, sum };
+      }
+    } else { // sehr viele Aufgaben: abwechselnd nach Aufwand
+      const order = idx.map((_, k) => k).sort((a, b) => m[b] - m[a]);
+      let mask = 0, sum = 0;
+      order.forEach((k, r) => { if (r % 2 === 0) { mask |= 1 << k; sum += m[k]; } });
+      best = { mask, sum };
+    }
+    const one = idx.filter((_, k) => best.mask & (1 << k)), other = idx.filter((_, k) => !(best.mask & (1 << k)));
+    const big = best.sum >= total - best.sum ? [one, other, best.sum, total - best.sum] : [other, one, total - best.sum, best.sum];
+    return { big: big[0], small: big[1], bigSum: big[2], smallSum: big[3] };
+  }).sort((a, b) => (b.bigSum - b.smallSum) - (a.bigSum - a.smallSum));
+
+  const load = { A: 0, B: 0 };
   const assign = new Map();
-  for (const [t, i] of order) {
-    const g = sum[groupOf(t)] ||= { A: 0, B: 0 };
-    const p = g.A <= g.B ? 'A' : 'B';
-    g[p] += monthlyMinutes(t);
-    assign.set(i, p);
+  for (const h of halves) {
+    const [lo, hi] = load.A <= load.B ? ['A', 'B'] : ['B', 'A'];
+    h.big.forEach((i) => assign.set(i, lo));
+    h.small.forEach((i) => assign.set(i, hi));
+    load[lo] += h.bigSum;
+    load[hi] += h.smallSum;
   }
   return tasks.map((t, i) => (assign.has(i) ? { ...t, assign: assign.get(i) } : t));
 }

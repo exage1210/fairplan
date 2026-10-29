@@ -1,6 +1,6 @@
 import {
-  KINDS, PRESETS, GROUPS, kindOf, evaluate, relevantKeys, completionId, nextSwap,
-  packageOwners, localToday, toDay, fromDay, groupOf, windowsBetween, awayDuring,
+  KINDS, PRESETS, kindOf, evaluate, relevantKeys, completionId,
+  localToday, toDay, fromDay, windowsBetween, awayDuring,
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
@@ -21,13 +21,13 @@ const SHORT_KIND = {
   daily: 'täglich', weekly: 'wöchentlich', biweekly: '2 Wochen', monthly: 'monatlich',
   quarterly: 'vierteljährlich', halfyear: 'halbjährlich', yearly: 'jährlich', asneeded: 'bei Bedarf',
 };
-const ASSIGN_LABEL = { A: 'Paket A', B: 'Paket B', shared: 'Gemeinsam', each: 'Pro Person', alternate: 'Abwechselnd' };
-const GROUP_LABEL = { short: 'Täglich bis monatlich', quarter: 'Vierteljährlich', half: 'Halbjährlich', year: 'Jährlich' };
+const ASSIGN_LABEL = { A: 'Person 1', B: 'Person 2', shared: 'Gemeinsam', each: 'Pro Person', alternate: 'Abwechselnd' };
+// Zuteilung mit Namen: Paket A = Person 1, Paket B = Person 2 (fix)
+const assignLabel = (a) => (a === 'A' || a === 'B' ? esc(S.hh?.persons[a === 'A' ? 0 : 1]?.name ?? ASSIGN_LABEL[a]) : ASSIGN_LABEL[a]);
 const UNIT_LABEL = { day: ['Tag', 'Tage'], week: ['Woche', 'Wochen'], month: ['Monat', 'Monate'] };
 const MONTHS = Array.from({ length: 12 }, (_, i) => new Date(2000, i, 1).toLocaleDateString('de-AT', { month: 'long' }));
 const DEFAULT_HOUSEHOLD = {
   swapped: false,
-  rotation: { short: 2, quarter: 6, half: 12, year: 12 },
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
@@ -237,8 +237,7 @@ const sortItems = (items) => items.sort((a, b) =>
 function ownerText(it) {
   const t = it.task;
   if (it.owner === null) return 'Gemeinsam';
-  const extra = t.assign === 'A' || t.assign === 'B' ? ` · ${ASSIGN_LABEL[t.assign]}`
-    : t.assign === 'each' ? ' · pro Person' : t.assign === 'alternate' ? ' · abwechselnd' : '';
+  const extra = t.assign === 'each' ? ' · pro Person' : t.assign === 'alternate' ? ' · abwechselnd' : '';
   return `${pn(it.owner)}${extra}`;
 }
 
@@ -416,10 +415,6 @@ function viewToday() {
     return list.length ? fold(`other-${p.id}`, `<span>${pn(p.id)}: ${list.length} offen</span>`, rows(list)) : '';
   }).join('');
 
-  const used = new Set(S.tasks.filter((t) => t.assign === 'A' || t.assign === 'B').map(groupOf));
-  const swaps = S.hh.rotationOff ? '' : GROUPS.filter((g) => used.has(g))
-    .map((g) => `<div>${GROUP_LABEL[g]}: ${fmtLong(nextSwap(g, S.hh, S.today))}</div>`).join('');
-
   const rules = (S.hh.rules || []).filter(Boolean);
   return `<div class="banner now">${banner}</div>
     ${rules.length ? `<section class="group"><h2>Abmachungen<span class="count">${rules.filter((r) => S.comps.has(completionId(ruleId(r), ruleKey(), null))).length}/${rules.length}</span></h2>
@@ -430,8 +425,7 @@ function viewToday() {
     ${later.length ? fold('later', `Später <span class="count">${later.length}</span>`, rows(later)) : ''}
     ${need.length ? fold('need', `Bei Bedarf <span class="count">${need.length}</span>`, rows(need, () => '')) : ''}
     ${doneToday.length ? fold('done', `Heute erledigt <span class="count">${doneToday.length}</span>`, rows(doneToday, statusText)) : ''}
-    ${others}
-    ${swaps ? `<h2>Nächster Pakettausch</h2><div class="small">${swaps}</div>` : ''}`;
+    ${others}`;
 }
 
 function filterBar() {
@@ -570,21 +564,16 @@ function dayPanel(sel, wins, doneOn, holiday) {
 function viewSettings() {
   const hh = S.hh;
   const opt = (v, l, cur) => `<option value="${v}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(l)}</option>`;
-  const [a, b] = packageOwners('short', hh, toDay(S.today));
-  const load = loadByPerson(S.tasks, hh, toDay(S.today));
+  const load = loadByPerson(S.tasks, hh);
 
   const persons = hh.persons.map((p, i) => `<div class="setting">
       <label class="field">Person ${i + 1}<input type="text" data-person-name="${i}" value="${esc(p.name)}" maxlength="30"></label>
       <div class="colors">${COLORS.map(([c, l]) => `<button data-person-color="${i}" data-color="${c}" aria-pressed="${p.color === c}"><i class="sw" style="--pc:var(--c-${c})"></i>${l}</button>`).join('')}</div>
     </div>`).join('');
 
-  const rotation = GROUPS.map((g) => `<label class="field">${GROUP_LABEL[g]} – tauschen alle
-      <select data-rotation="${g}">${[1, 2, 3, 4, 6, 12, 24].map((n) => opt(n, `${n} ${n === 1 ? 'Monat' : 'Monate'}`, hh.rotation[g])).join('')}</select>
-      <span class="small">Nächster Tausch: ${fmtLong(nextSwap(g, hh, S.today))}</span></label>`).join('');
-
   const tasks = S.tasks.length
     ? S.tasks.slice().sort((x, y) => kindRank(x) - kindRank(y) || (x.order ?? 0) - (y.order ?? 0)).map((t) => `
-      <button class="rowbtn" data-edit="${esc(t.id)}"><span>${esc(t.title)}<br><span class="meta">${intervalLabel(t)} · ${ASSIGN_LABEL[t.assign]}${t.min ? ` · ${t.min} Min` : ''}${t.season ? ` · Saison ${seasonLabel(t.season)}` : ''}</span></span><span class="meta">Bearbeiten</span></button>`).join('')
+      <button class="rowbtn" data-edit="${esc(t.id)}"><span>${esc(t.title)}<br><span class="meta">${intervalLabel(t)} · ${assignLabel(t.assign)}${t.min ? ` · ${t.min} Min` : ''}${t.season ? ` · Saison ${seasonLabel(t.season)}` : ''}</span></span><span class="meta">Bearbeiten</span></button>`).join('')
     : '<p class="muted">Noch keine Aufgaben.</p>';
 
   return `
@@ -611,7 +600,7 @@ function viewSettings() {
     ${persons}
 
     <h2>Putztage</h2>
-    <p class="small">An diesen Tagen sind die Aufgaben der jeweiligen Person dran – auch nach dem Pakettausch. Gemeinsames am gemeinsamen Putztag.</p>
+    <p class="small">An diesen Tagen sind die Aufgaben der jeweiligen Person dran. Gemeinsames am gemeinsamen Putztag.</p>
     ${hh.persons.map((p, i) => `<div class="setting"><p>${pn(p.id)}${p.id === S.me ? ' (du)' : ''}</p>${dayChips(p.days?.length ? p.days : [5], `data-person-day="${i}"`)}</div>`).join('')}
     <div class="setting"><p>Gemeinsam</p>${dayChips(hh.sharedDays?.length ? hh.sharedDays : [5], 'data-shared-day')}</div>
 
@@ -625,10 +614,6 @@ function viewSettings() {
         ${a.from || a.to ? `<button class="btn" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}</div>`;
     }).join('')}
 
-    <h2>Start des Plans</h2>
-    <label class="field">Ab diesem Tag zählen die Aufgaben<input type="date" data-start value="${esc(hh.setup)}"></label>
-    <p class="small">Termine davor zählen nicht. Auch der 2-Wochen-Rhythmus und der Pakettausch zählen ab hier.</p>
-
     <h2>Unsere Abmachungen</h2>
     <p class="small">Selbstverständliches für jeden Tag. Steht bei „Aktuell“ unter „Heute“: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für beide ab. Wird nie als offen angezeigt, zählt aber in Bilanz und Verlauf. Vorschläge antippen zum Auswählen, eigene unten eintragen (eine pro Zeile).</p>
     ${ruleChips(hh.rules || [], 'data-rule-suggest')}
@@ -640,14 +625,8 @@ function viewSettings() {
     <div class="rows">${tasks}</div>
 
     <h2>Plan neu einrichten</h2>
-    <p class="small">Aufgaben neu aus der Vorlage (fair aufgeteilt) oder leer aufbauen. Code, Verbindung zur anderen Person und Verlauf bleiben, der Start ist dann heute.</p>
+    <p class="small">Aufgaben neu aus der Vorlage (fair aufgeteilt) oder leer aufbauen. Code, Verbindung zur anderen Person und Verlauf bleiben, gezählt wird ab heute.</p>
     <div class="btnrow"><button class="btn block" data-action="reset-plan">Plan neu einrichten</button></div>
-
-    <h2>Pakettausch</h2>
-    ${switchRow('rotation', !hh.rotationOff, 'Pakete regelmäßig tauschen', 'Paket A und B wechseln am Monatsersten, damit niemand dauerhaft dieselben Aufgaben hat.')}
-    <p>Paket A: ${pn(a)} · Paket B: ${pn(b)}</p>
-    <div class="btnrow"><button class="btn" data-action="flip">Zuteilung umdrehen</button></div>
-    ${hh.rotationOff ? '' : `<p class="small">Gezählt ab dem Start des Plans (${fmtLong(hh.setup)}).</p>${rotation}`}
 
     ${canHaptic ? `<h2>Vibrieren</h2>
     ${switchRow('vibrate', ls.get('vibrate') !== '0', 'Beim Abhaken kurz vibrieren', 'Gilt nur für dieses Gerät.')}` : ''}
@@ -656,6 +635,10 @@ function viewSettings() {
     <p class="small">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt die Aufgaben durch die aus der Datei.</p>
     <div class="btnrow"><button class="btn" data-action="export">Daten exportieren</button><button class="btn" data-action="import">Daten importieren</button></div>
     <input type="file" id="importFile" accept=".json,application/json" hidden>
+
+    <h2>Start des Plans</h2>
+    <label class="field">Ab diesem Tag zählen die Termine<input type="date" data-start value="${esc(hh.setup)}"></label>
+    <p class="small">Davor ist nichts „vergessen“. Wird beim Einrichten automatisch gesetzt. Ändern, wenn ihr erst später loslegen wollt (z. B. nach einem Urlaub oder Umzug) oder neu zu zählen beginnen wollt, ohne den Plan neu einzurichten. Auch der 2-Wochen-Rhythmus zählt ab hier.</p>
 
     <h2>Abmelden</h2>
     <p class="small">Entfernt den Haushalt nur von diesem Gerät. Mit dem Code kannst du wieder beitreten.</p>
@@ -685,6 +668,7 @@ function startSetup(reset = false) {
 const hours = (min) => (min / 60).toLocaleString('de-AT', { maximumFractionDigits: 1 });
 const setupCtx = () => ({ ...DEFAULT_HOUSEHOLD, setup: S.setup.start, persons: [{ id: 'p1' }, { id: 'p2' }] });
 
+
 // Wochentage zum An-/Abwählen (Putztage)
 const dayChips = (picked, attr) => `<div class="filters days">${WEEKDAYS.map((w, i) =>
   `<button ${attr} data-wd="${i}" aria-pressed="${picked.includes(i)}">${w}</button>`).join('')}</div>`;
@@ -708,16 +692,14 @@ function renderSetup() {
       ${st.persons.map((p, i) => `<div class="setting">
         <label class="field">Name Person ${i + 1}<input type="text" data-setup-name="${i}" value="${esc(p.name)}" maxlength="30"></label>
         <div class="colors">${COLORS.map(([c, l]) => `<button data-setup-color="${i}" data-color="${c}" aria-pressed="${p.color === c}"><i class="sw" style="--pc:var(--c-${c})"></i>${l}</button>`).join('')}</div>
-        <p class="small">Putztage</p>${dayChips(p.days, `data-setup-day="${i}"`)}
+        <p class="small">Wann ist der Putztag? (mehrere möglich)</p>${dayChips(p.days, `data-setup-day="${i}"`)}
       </div>`).join('')}
       <div class="setting"><p class="small">Gemeinsamer Putztag (für Gemeinsames)</p>${dayChips(st.shared, 'data-setup-shared')}</div>
-      <p class="small">An den Putztagen sind die Aufgaben der jeweiligen Person dran. Später in den Optionen änderbar.</p>
+      <p class="small">An ihren Putztagen sind die Aufgaben der jeweiligen Person dran. Später in den Optionen änderbar.</p>
       ${err}
       <div class="btnrow"><button class="btn" data-setup="${st.reset ? 'cancel' : 'start'}">${st.reset ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
   } else if (st.step === 'template') {
     body = `<h2>Schritt 2 von 3 · Vorlage</h2>
-      <label class="field">Start des Plans<input type="date" data-setup-start value="${esc(st.start)}"></label>
-      <p class="small">Ab diesem Tag zählen die Aufgaben, auch der Pakettausch.</p>
       <button class="choice" data-setup="split"><strong>Vorschlag 2-Personen-Haushalt</strong>
         <span>${TEMPLATE.length} Aufgaben mit geschätzter Dauer, fair aufgeteilt und auf eure Putztage verteilt, dazu ${TEMPLATE_RULES.length} Abmachungen</span></button>
       <button class="choice" data-setup="rules"><strong>Leer starten</strong>
@@ -725,13 +707,13 @@ function renderSetup() {
       ${st.reset ? '<p class="small">Die bisherigen Aufgaben werden ersetzt. Code, Verbindung und Verlauf bleiben.</p>' : ''}
       <div class="btnrow"><button class="btn" data-setup="persons">Zurück</button></div>`;
   } else if (st.step === 'split') {
-    const load = loadByPerson(st.tasks, setupCtx(), toDay(S.today));
+    const load = loadByPerson(st.tasks, setupCtx());
     const names = st.persons.map((p) => esc(p.name.trim()));
     const list = (pkg) => st.tasks.map((t, i) => [t, i]).filter(([t]) => t.assign === pkg).map(([t, i]) => `
       <button class="rowbtn" data-split="${i}"><span>${esc(t.title)}<br><span class="meta">${t.min} Min · ${intervalLabel(t)} · ${hours(monthlyMinutes(t))} h/Monat</span></span><span class="meta">tauschen</span></button>`).join('');
     body = `<h2>Schritt 3 von 3 · Aufteilung</h2>
       <div class="banner now">${names[0]} <strong>${hours(load.p1)} h</strong> · ${names[1]} <strong>${hours(load.p2)} h</strong> pro Monat</div>
-      <p class="small">Automatisch fair verteilt nach geschätzter Dauer × Häufigkeit. Antippen gibt eine Aufgabe der anderen Person – die Bilanz rechnet mit. Gemeinsames zählt je zur Hälfte. Die Pakete tauschen alle 2 Monate (abschaltbar), Zeiten kannst du später bei jeder Aufgabe ändern.</p>
+      <p class="small">Automatisch fair verteilt: pro Intervall gleich viele Aufgaben und möglichst gleich viel Zeit (Dauer × Häufigkeit). Antippen gibt eine Aufgabe der anderen Person – die Bilanz rechnet mit. Gemeinsames zählt je zur Hälfte. Zeiten kannst du später bei jeder Aufgabe ändern.</p>
       <h2><i class="sw" style="--pc:var(--c-${st.persons[0].color})"></i>${names[0]}</h2><div class="rows">${list('A')}</div>
       <h2><i class="sw" style="--pc:var(--c-${st.persons[1].color})"></i>${names[1]}</h2><div class="rows">${list('B')}</div>
       <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und alle ${TEMPLATE_RULES.length} Abmachungen.</p>
@@ -1078,7 +1060,6 @@ app.addEventListener('click', (e) => {
     case 'badge':
       Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});
       return;
-    case 'flip': updateHH({ swapped: !S.hh.swapped }); return snack('Zuteilung umgedreht.');
     case 'leave':
       if (!confirm('Haushalt auf diesem Gerät abmelden?')) return;
       ls.set('code', null); ls.set('me', null); location.reload();
@@ -1114,7 +1095,6 @@ app.addEventListener('change', (e) => {
   if (d.action === 'toggle-rule') return toggleRule(el);
   if (d.action === 'plan') { ls.set('plan', el.checked ? '1' : null); return render(); }
   if (d.action === 'toggle-step') return toggleStep(el);
-  if (d.switch === 'rotation') return updateHH({ rotationOff: !el.checked });
   if (d.switch === 'vibrate') { ls.set('vibrate', el.checked ? null : '0'); if (el.checked) haptic(); return; }
   if (el.id === 'importFile') return importFile(el);
   if (d.personName !== undefined) {
@@ -1123,10 +1103,9 @@ app.addEventListener('change', (e) => {
     const persons = S.hh.persons.map((p, i) => (i === +d.personName ? { ...p, name } : p));
     return updateHH({ persons });
   }
-  if (d.rotation) return updateHH({ rotation: { ...S.hh.rotation, [d.rotation]: +el.value } });
   if (d.start !== undefined) {
     const ok = /^\d{4}-\d{2}-\d{2}$/.test(el.value) && el.value !== S.hh.setup
-      && confirm('Start ändern? Der 2-Wochen-Rhythmus und der Pakettausch verschieben sich mit. Schon Abgehaktes im laufenden 2-Wochen-Block kann dadurch wieder offen erscheinen.');
+      && confirm('Start ändern? Der 2-Wochen-Rhythmus verschiebt sich mit. Schon Abgehaktes im laufenden 2-Wochen-Block kann dadurch wieder offen erscheinen.');
     if (ok) { updateHH({ setup: el.value }); snack('Start geändert.'); }
     else el.value = S.hh.setup;
     return render();
@@ -1190,7 +1169,6 @@ app.addEventListener('toggle', (e) => {
 app.addEventListener('input', (e) => {
   const d = e.target.dataset;
   if (d.setupName !== undefined) S.setup.persons[+d.setupName].name = e.target.value;
-  if (d.setupStart !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) S.setup.start = e.target.value;
 });
 
 // ---------- Aufgabe bearbeiten ----------
@@ -1215,7 +1193,7 @@ function openEditor(id) {
     <label class="field" data-pos>Termin<select name="pos"></select></label>
     <label class="field" data-permonth>Ca. wie oft pro Monat?<input type="number" name="perMonth" min="0" max="99" step="0.5" inputmode="decimal" value="${t.perMonth ?? ''}"></label>
     <p class="small" data-next></p>
-    <label class="field">Zuteilung<select name="assign">${Object.entries(ASSIGN_LABEL).map(([v, l]) => opt(v, v === 'A' || v === 'B' ? `${l} (rotiert)` : v === 'shared' ? `${l} (jede/r darf abhaken)` : v === 'alternate' ? `${l} (jede Periode die andere Person)` : l, t.assign)).join('')}</select></label>
+    <label class="field">Zuteilung<select name="assign">${Object.keys(ASSIGN_LABEL).map((v) => opt(v, v === 'shared' ? 'Gemeinsam (jede/r darf abhaken)' : v === 'alternate' ? 'Abwechselnd (jedes Mal die andere Person)' : v === 'each' ? 'Pro Person (jede/r für sich)' : S.hh.persons[v === 'A' ? 0 : 1].name, t.assign)).join('')}</select></label>
     <label class="cb"><input type="checkbox" name="hasSeason" ${t.season ? 'checked' : ''}> Nur in einer Saison</label>
     <div class="inline" data-season><select name="from">${months(t.season?.from ?? 3)}</select><span>bis</span><select name="to">${months(t.season?.to ?? 10)}</select></div>
     <label class="field">Teilschritte (optional, einer pro Zeile)<textarea name="steps" rows="3" placeholder="WC&#10;Waschbecken&#10;Dusche">${esc((t.steps || []).join('\n'))}</textarea></label>
