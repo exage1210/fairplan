@@ -16,7 +16,7 @@ Putzplan-PWA für einen Haushalt mit 2 Personen. Version 1 ist fertig und in Ben
 - `js/logic.js`: Fälligkeit und Rotation (reine Funktionen), Tests in `tests/logic.test.js` (`node --test`).
 - `js/store.js`: Firestore bzw. lokaler Testmodus (wenn `config.js` leer).
 - `js/app.js`: Oberfläche (Einrichtung, Heute, Alle, Kalender, Verlauf, Optionen, Editor).
-- `js/template.js`: Vorlage „Vorschlag für 2 Personen“. Wirkt nur bei neu angelegten Haushalten, bestehende Haushalte ändern sich dadurch nicht.
+- `js/template.js`: Vorlage „Vorschlag für 2 Personen“ (mit Minuten-Schätzungen) und vorgeschlagene Abmachungen. Wirkt nur bei neu angelegten Haushalten, bestehende Haushalte ändern sich dadurch nicht.
 - `sw.js`: Offline-Cache; bei Änderung der Dateiliste `SHELL` anpassen.
 
 ## Getroffene Entscheidungen
@@ -35,6 +35,13 @@ Putzplan-PWA für einen Haushalt mit 2 Personen. Version 1 ist fertig und in Ben
 - Offen: Push-Benachrichtigungen an die andere Person brauchen einen Server (Firebase Blaze mit Kreditkarte oder z. B. Cloudflare Workers) – noch nicht entschieden.
 - Farben: 6 (Rot und Gold entfernt; CSS-Variablen bleiben für alte Daten). Tab „Einstellungen“ heißt „Optionen“, neuer Tab „Kalender“ (ab Montag).
 - Runde 2, Etappe 1a (29.10.2026): Logo/Icon „fairplan“ in einer Zeile, weiß, Systemschrift halbfett. Personenfarben Blau #5B8DEF, Rosa #F07FB0, Gelb #F2C94C, Grün #5BC98C, Violett #A78BFA, Orange #F59E5B (Schwarz/Weiß nicht mehr wählbar, Variablen bleiben). Fast-schwarzer Hintergrund #111214, keine Trennlinien, Ecken 3 px, kompakte Zeilen. Checkbox-Rand in Personenfarbe (abgehakt gefüllt), Gemeinsames grau, kein Farbstreifen. Rot nur für Vergessenes. 4 Tabs: Aktuell · Alle · Kalender · Optionen; Verlauf vorübergehend über Optionen. Plan der weiteren Etappen: Vault-Notiz „Projekte/Fairplan/Änderungen 2026-10-29“.
+- Etappe 3+5 (29.10.2026): Aufgaben haben `min` (geschätzte Minuten), bei Bedarf `perMonth`, optional `steps` (Teilschritte). Aufwand/Monat = min × Häufigkeit (täglich 30, wöchentlich 4,3, 2 Wochen 2,2, monatlich 1, vierteljährlich 1/3 …, Saison anteilig) – `timesPerMonth`/`monthlyMinutes`/`loadByPerson`/`autoSplit` in logic.js. Faire Aufteilung je Intervallgruppe (rotieren getrennt), Gemeinsames/Abwechselndes je zur Hälfte.
+- Einrichtung: Personen → Vorlage → (Vorschlag: Aufteilung mit Live-Bilanz, Antippen tauscht) bzw. (Leer: Abmachungen wählen) → Einladung mit QR-Code (vendored `js/qrcode.js`, MIT, lazy geladen) und Link `?join=CODE`. Beitritt per Link im Browser zeigt Hinweis zum Home-Bildschirm (iPhone: Homescreen-App hat eigenen Speicher, ggf. Code nochmal eingeben).
+- „Plan neu einrichten“ (Optionen): gleicher Ablauf, ersetzt Aufgaben, Start = heute, `swapped` false; Code, Personen-IDs, eigene Abmachungen und Verlauf bleiben.
+- Teilschritte: Erledigung je Schritt als Completion `<completionId>__s<i>` mit `step`, gleicher `key`; alle erledigt → Aufgabe erledigt. Schritt-Erledigungen zählen nicht in Bilanz/Verlauf/Kalender (`watchDays` filtert `step`).
+- Optionen: Pakettausch-Schalter (`rotationOff` im Haushalt, packageOwners tauscht dann nicht), Vibrieren (pro Gerät `fairplan.vibrate`; Android `navigator.vibrate`, iPhone 17.4+ versteckter `<input switch>`), Backup Export/Import (JSON, `exportAll`/`importAll` im Store; Import ersetzt Aufgaben, ergänzt Erledigungen), Aufwand pro Monat je Person. „Alle“ zusätzlich Filter nach Intervall.
+- Service Worker holt eigene Dateien mit `cache: 'no-cache'` (sonst bis 10 Min. alte Version durch GitHub-Pages-Cache).
+- Bewusst später: Joker, Urlaubsausgleich.
 - Nachträglich ergänzt: Bügeln (wöchentlich, A), Einkaufen (wöchentlich, B), Auto putzen und Lüftungsfilter im Bad (halbjährlich, gemeinsam).
 
 ## Offen / Ideen

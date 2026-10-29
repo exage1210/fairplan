@@ -1,10 +1,10 @@
 // Service Worker: App-Dateien für den Offline-Betrieb zwischenspeichern.
-// Eigene Dateien: erst Netz (immer aktuell), sonst Cache. Firebase-Bibliothek: erst Cache.
+// Eigene Dateien: erst Netz (am Server nachfragen statt 10 Min. Browser-Cache), sonst Cache. Firebase-Bibliothek: erst Cache.
 // Die Firestore-Daten selbst puffert Firebase eigenständig (IndexedDB).
-const CACHE = 'fairplan-v12';
+const CACHE = 'fairplan-v13';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.json', 'config.js',
-  'js/app.js', 'js/logic.js', 'js/store.js', 'js/template.js',
+  'js/app.js', 'js/logic.js', 'js/store.js', 'js/template.js', 'js/qrcode.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 
@@ -36,7 +36,7 @@ self.addEventListener('fetch', (e) => {
 
   if (url.origin !== self.location.origin) return;
   e.respondWith(
-    fetch(req)
+    fetch(req.mode === 'navigate' ? req.url : req, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
         return res;

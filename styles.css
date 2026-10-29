@@ -110,6 +110,8 @@ details.fold > .group:first-of-type { margin-top: 4px; }
   border-radius: var(--r); transition: transform 0.2s ease-out, opacity 0.2s;
 }
 .item[data-swipe] { touch-action: pan-y; }
+.item:has(details.steps) { align-items: flex-start; }
+.item:has(details.steps) .check { align-self: flex-start; padding-top: 10px; }
 .item.dragging { transition: none; background: var(--surface); }
 .item.checking .title { color: var(--fg-2); text-decoration: line-through; text-decoration-color: var(--fg-2); }
 .item.leaving { transform: translateX(100%); opacity: 0; transition: transform 0.25s ease-in, opacity 0.25s ease-in; }
@@ -302,3 +304,27 @@ label.cb input { width: 22px; height: 22px; accent-color: var(--fg); }
 [data-theme="light"] .by[data-c="gold"] { --pt: #8a6d0b; }
 [data-theme="light"] .by[data-c="schwarz"] { --pt: #000000; }
 [data-theme="light"] .by[data-c="weiss"] { --pt: var(--fg); }
+
+/* Einladung */
+.qr { width: 200px; margin: 12px 0 4px; padding: 8px; border-radius: var(--r); background: #ffffff; color: #000000; font-size: 13px; }
+.qr svg { display: block; width: 100%; height: auto; }
+.filters + .filters { margin-top: 8px; }
+
+/* Teilschritte */
+details.steps { margin-top: 2px; }
+details.steps > summary { font-size: 13px; color: var(--fg-2); cursor: pointer; padding: 2px 0; list-style: none; }
+details.steps > summary::-webkit-details-marker { display: none; }
+details.steps > summary::after { content: " ▾"; }
+details.steps:not([open]) > summary::after { content: " ▸"; }
+.step { display: flex; align-items: center; gap: 10px; min-height: 36px; cursor: pointer; font-size: 15px; }
+.step input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.step .box { flex: 0 0 18px; height: 18px; border: 2px solid var(--pc, var(--shared)); border-radius: var(--r); position: relative; }
+.step input:checked + .box { background: var(--pc, var(--shared)); }
+.step input:checked + .box::after {
+  content: ""; position: absolute; left: 4px; top: 0.5px; width: 4px; height: 9px;
+  border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.step input:checked ~ span:last-child { color: var(--fg-2); text-decoration: line-through; }
+
+/* Vibrier-Schalter fürs iPhone: unsichtbar, aber klickbar */
+#haptic { position: fixed; left: -100px; top: 0; opacity: 0; pointer-events: none; }
