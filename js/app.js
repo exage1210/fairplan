@@ -8,8 +8,8 @@ import { TEMPLATE, TEMPLATE_RULES } from './template.js';
 // ---------- Konstanten & Hilfen ----------
 
 const COLORS = [
-  ['rosa', 'Rosa'], ['blau', 'Blau'], ['gelb', 'Gelb'],
-  ['gruen', 'Grün'], ['schwarz', 'Schwarz'], ['weiss', 'Weiß'],
+  ['blau', 'Blau'], ['rosa', 'Rosa'], ['gelb', 'Gelb'],
+  ['gruen', 'Grün'], ['violett', 'Violett'], ['orange', 'Orange'],
 ];
 const KIND_LABEL = {
   daily: 'Täglich', weekly: 'Wöchentlich', biweekly: 'Alle 2 Wochen', monthly: 'Monatlich',
@@ -26,7 +26,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDay: { halfyearMonth: 4, halfyearDay: 15, yearlyMonth: 4, yearlyDay: 15 },
 };
 
-const LOGO = '<h1 class="logo"><span>fair</span><span>plan</span></h1>';
+const LOGO = '<h1 class="logo">fairplan</h1>';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const $ = (sel, root = document) => root.querySelector(sel);
 const ls = {
@@ -192,10 +192,12 @@ function render() {
   const views = { heute: viewToday, alle: viewAll, kalender: viewCalendar, verlauf: viewHistory, einstellungen: viewSettings };
   watchHistory(S.view === 'verlauf');
   watchDays(S.view === 'kalender' ? calRange() : S.view === 'verlauf' ? [`${S.today.slice(0, 7)}-01`, S.today] : null);
-  const tabs = [['heute', 'Heute'], ['alle', 'Alle'], ['kalender', 'Kalender'], ['verlauf', 'Verlauf'], ['einstellungen', 'Optionen']]
-    .map(([v, l]) => `<button data-view="${v}" ${S.view === v ? 'aria-current="page"' : ''}>${l}</button>`).join('');
+  // Verlauf ist vorübergehend über die Optionen erreichbar (kommt mit Etappe 2 in den Kalender)
+  const tab = S.view === 'verlauf' ? 'einstellungen' : S.view;
+  const tabs = [['heute', 'Aktuell'], ['alle', 'Alle'], ['kalender', 'Kalender'], ['einstellungen', 'Optionen']]
+    .map(([v, l]) => `<button data-view="${v}" ${tab === v ? 'aria-current="page"' : ''}>${l}</button>`).join('');
   const scroll = window.scrollY;
-  app.innerHTML = `<header class="top">${LOGO}<span class="who">${pn(S.me)}</span></header>
+  app.innerHTML = `<header class="top">${LOGO}</header>
     ${views[S.view]()}
     <nav class="tabs">${tabs}</nav>`;
   window.scrollTo(0, scroll);
@@ -243,7 +245,6 @@ function itemRow(it, { lead = 'interval' } = {}) {
   const meta = [first, statusText(it)].filter(Boolean).join(' · ');
   const cls = [it.status, active ? '' : 'inactive'].join(' ');
   return `<div class="item ${cls}" style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
-    <span class="strip"></span>
     <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(it.task.id)}" data-slot="${esc(it.slot ?? '')}"
       ${it.status === 'done' ? 'checked' : ''} ${active ? '' : 'disabled'} aria-label="${esc(it.task.title)} erledigt"><span class="box"></span></label>
     <div class="body">${it.status === 'overdue' ? '<span class="badge">Nicht geschafft</span>' : ''}<div class="title">${esc(it.task.title)}</div>
@@ -420,7 +421,6 @@ function viewCalendar() {
       const missed = !done && !pause && kindOf(w.task) !== 'daily' && w.end < S.today && relevant.has(w.key);
       const state = done ? ` · ✓ ${byName(done.by)}, ${fmtWd(done.day)}` : pause ? ' · pausiert (abwesend)' : missed ? ' · <span class="ov">nicht geschafft</span>' : '';
       return `<div class="item ${missed ? 'overdue' : done ? 'done' : ''}" style="--pc:${colorOf(w.owner)}">
-        <span class="strip"></span>
         <div class="body cal"><div class="title">${esc(w.task.title)}</div>
           <div class="meta">${w.owner === null ? 'Gemeinsam' : pn(w.owner)} · ${w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)} bis ${fmtWd(w.end)}`}${state}</div></div>
       </div>`;
@@ -455,7 +455,8 @@ function viewCalendar() {
 
 function viewHistory() {
   const monthName = asDate(S.today).toLocaleDateString('de-AT', { month: 'long' });
-  const head = `<p class="banner">Im ${monthName} erledigt: ${balance(S.dayComps)}</p>`;
+  const head = `<div class="btnrow"><button class="btn" data-view="einstellungen">‹ Zurück zu den Optionen</button></div>
+    <p class="banner">Im ${monthName} erledigt: ${balance(S.dayComps)}</p>`;
   if (!S.history.length) return `${head}<h2>Verlauf</h2><p class="muted">Noch nichts erledigt.</p>`;
   let last = '';
   return head + S.history.map((c) => {
@@ -492,6 +493,9 @@ function viewSettings() {
     : '<p class="muted">Noch keine Aufgaben.</p>';
 
   return `
+    <h2>Verlauf</h2>
+    <div class="btnrow"><button class="btn block" data-view="verlauf">Verlauf anzeigen</button></div>
+
     <h2>Zahl am App-Icon</h2>
     <p class="small">Zeigt, was bei dir nicht geschafft oder jetzt dran ist (ohne Tägliches).</p>
     ${badgeSetting()}
@@ -529,7 +533,7 @@ function viewSettings() {
     <p class="small">Standard ist der Tag der Einrichtung. Davor ist nichts „nicht geschafft“. Auch der 2-Wochen-Rhythmus und der Pakettausch zählen ab hier.</p>
 
     <h2>Unsere Abmachungen</h2>
-    <p class="small">Selbstverständliches, das ihr nicht abhaken wollt – z. B. „Geschirr macht, wer nicht kocht“. Eine Abmachung pro Zeile. Steht bei „Heute“ oben zum Aufklappen und zählt nicht in der Bilanz.</p>
+    <p class="small">Selbstverständliches, das ihr nicht abhaken wollt – z. B. „Geschirr macht, wer nicht kocht“. Eine Abmachung pro Zeile. Steht bei „Aktuell“ oben zum Aufklappen und zählt nicht in der Bilanz.</p>
     <label class="field"><textarea data-rules rows="5" placeholder="Geschirr macht, wer nicht kocht&#10;Abends kurz aufräumen">${esc((hh.rules || []).join('\n'))}</textarea></label>
 
     <h2>Aufgaben</h2>
@@ -651,7 +655,7 @@ async function joinHousehold() {
 function theme() { return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'; }
 function setTheme(t) {
   document.documentElement.dataset.theme = t;
-  $('meta[name="theme-color"]').content = t === 'light' ? '#ffffff' : '#18191b';
+  $('meta[name="theme-color"]').content = t === 'light' ? '#ffffff' : '#111214';
   ls.set('theme', t);
 }
 
