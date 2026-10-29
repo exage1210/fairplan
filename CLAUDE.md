@@ -41,6 +41,7 @@ Putzplan-PWA für einen Haushalt mit 2 Personen. Version 1 ist fertig und in Ben
 - Teilschritte: Erledigung je Schritt als Completion `<completionId>__s<i>` mit `step`, gleicher `key`; alle erledigt → Aufgabe erledigt. Schritt-Erledigungen zählen nicht in Bilanz/Verlauf/Kalender (`watchDays` filtert `step`).
 - Optionen: Vibrieren (pro Gerät `fairplan.vibrate`; Android `navigator.vibrate`, iPhone 17.4+ versteckter `<input switch>`), Backup Export/Import (JSON, `exportAll`/`importAll` im Store; Import ersetzt Aufgaben, ergänzt Erledigungen), Aufwand pro Monat je Person. „Alle“ zusätzlich Filter nach Intervall.
 - Service Worker holt eigene Dateien mit `cache: 'no-cache'` (sonst bis 10 Min. alte Version durch GitHub-Pages-Cache).
+- Vereinfacht (29.10.2026): Optionen in 4 aufklappbaren Gruppen (Wir · Aufgaben · Dieses Gerät · Haushalt). Editor: Titel, Intervall, Zuteilung, Dauer sichtbar; Tag, Termin, Saison, Hinweis, Teilschritte unter „Mehr“. „Eigenes Intervall“ und Zuteilung „Abwechselnd“ ausgeblendet (Logik kann beides noch, bestehende Aufgaben bleiben bearbeitbar; Merkliste: später mit Hinweis „morgen Sabrina“ zurück). Vorlage: „Pflanzen kontrollieren“ jetzt wöchentlich statt täglich abwechselnd. Vorlage: doppeltes „Gewand ausmisten“ (halbjährlich) entfernt.
 - Bewusst später (Merkliste): Joker, Urlaubsausgleich, Pakettausch (Idee: als Belohnung).
 - Nachträglich ergänzt: Bügeln (wöchentlich, A), Einkaufen (wöchentlich, B), Auto putzen und Lüftungsfilter im Bad (halbjährlich, gemeinsam).
 

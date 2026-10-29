@@ -341,3 +341,22 @@ button.choice strong { display: block; font-size: 17px; font-weight: 600; }
 button.choice span { display: block; margin-top: 4px; font-size: 13px; color: var(--fg-2); }
 button.choice:active { background: var(--surface-2); }
 .filters.days button { min-width: 42px; padding: 0 10px; }
+
+/* Optionen: vier aufklappbare Gruppen */
+details.fold.opt { margin-top: 8px; }
+details.fold.opt > summary {
+  min-height: 60px; padding: 8px 14px; border-radius: var(--r); background: var(--surface);
+  color: var(--fg); font-size: 16px; letter-spacing: 0;
+}
+details.fold.opt > summary strong { display: block; font-weight: 600; }
+details.fold.opt > summary .small { display: block; font-weight: 400; margin-top: 1px; }
+details.fold.opt[open] > summary { background: var(--surface-2); }
+.opt-body { padding: 0 2px 12px; }
+.opt-body > h2:first-child { margin-top: 16px; }
+
+/* Editor: Seltenes eingeklappt */
+details.more { margin: 8px 0 4px; }
+details.more > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--fg-2); font-size: 14px; list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: " ▸"; margin-left: 4px; }
+details.more[open] > summary::after { content: " ▾"; }
