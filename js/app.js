@@ -16,6 +16,10 @@ const KIND_LABEL = {
   quarterly: 'Vierteljährlich', halfyear: 'Halbjährlich', yearly: 'Jährlich', custom: 'Eigenes Intervall',
   asneeded: 'Bei Bedarf',
 };
+const SHORT_KIND = {
+  daily: 'täglich', weekly: 'wöchentlich', biweekly: '2 Wochen', monthly: 'monatlich',
+  quarterly: 'vierteljährlich', halfyear: 'halbjährlich', yearly: 'jährlich', asneeded: 'bei Bedarf',
+};
 const ASSIGN_LABEL = { A: 'Paket A', B: 'Paket B', shared: 'Gemeinsam', each: 'Pro Person', alternate: 'Abwechselnd' };
 const GROUP_LABEL = { short: 'Täglich bis monatlich', quarter: 'Vierteljährlich', half: 'Halbjährlich', year: 'Jährlich' };
 const UNIT_LABEL = { day: ['Tag', 'Tage'], week: ['Woche', 'Wochen'], month: ['Monat', 'Monate'] };
@@ -52,6 +56,14 @@ const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WEEKDAYS_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const weekdayOf = (s) => (asDate(s).getDay() + 6) % 7; // Mo=0
 const fmtWd = (s) => `${WEEKDAYS[weekdayOf(s)]} ${fmtDate(s)}`;
+// Kurz relativ zu heute: Wochentag innerhalb von 6 Tagen, sonst „Mo 2.11.“
+function dayLabel(s) {
+  const diff = toDay(s) - toDay(S.today);
+  if (diff === 0) return 'heute';
+  if (diff === -1) return 'gestern';
+  return Math.abs(diff) <= 6 ? WEEKDAYS[weekdayOf(s)] : fmtWd(s);
+}
+const weekEnd = () => fromDay(toDay(S.today) + 6 - weekdayOf(S.today)); // Sonntag dieser Woche
 
 // ---------- Zustand ----------
 
@@ -224,7 +236,7 @@ function ownerText(it) {
 function statusText(it) {
   const c = it.completion;
   switch (it.status) {
-    case 'overdue': return `war dran ${rangeLabel(it.due, it.end)} · <span class="ov">noch erledigen</span>`;
+    case 'overdue': return lateText(it);
     case 'due': return kindOf(it.task) === 'daily' ? '' : `dran bis ${fmtDate(it.end)}`;
     case 'upcoming': return `dran ${rangeLabel(it.due, it.end)}`;
     case 'done': {
@@ -247,9 +259,36 @@ function itemRow(it, { lead = 'interval' } = {}) {
   return `<div class="item ${cls}" style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
     <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(it.task.id)}" data-slot="${esc(it.slot ?? '')}"
       ${it.status === 'done' ? 'checked' : ''} ${active ? '' : 'disabled'} aria-label="${esc(it.task.title)} erledigt"><span class="box"></span></label>
-    <div class="body">${it.status === 'overdue' ? '<span class="badge">Nicht geschafft</span>' : ''}<div class="title">${esc(it.task.title)}</div>
+    <div class="body"><div class="title">${esc(it.task.title)}</div>
       ${it.task.note ? `<div class="note">${esc(it.task.note)}</div>` : ''}
       ${meta ? `<div class="meta">${meta}</div>` : ''}</div>
+  </div>`;
+}
+
+// Vergessenes: neutral, nur der Hinweis in gedämpftem Rot – und das nur bei eigenen/gemeinsamen Aufgaben
+const lateText = (it) => `<span class="${it.owner === S.me || it.owner === null ? 'late' : ''}">seit ${dayLabel(it.end)} offen</span>`;
+
+// Termin-Zusatz für „Aktuell“: „seit … offen“, „bis Sa“, „ab Mo 2.11.“ – bei „Heute“ nichts
+function whenText(it) {
+  if (it.status === 'overdue') return lateText(it);
+  if (it.status === 'upcoming') return `ab ${dayLabel(it.due)}`;
+  if (it.status === 'due' && it.end > S.today) return `bis ${dayLabel(it.end)}`;
+  return '';
+}
+
+// Zeile für „Aktuell“: Intervall klein rechts, Zusatzzeile nur für Hinweis oder Termin.
+// Offene Zeilen lassen sich nach rechts wischen (= abhaken).
+function nowRow(it, sub = '') {
+  const p = person(it.owner);
+  const t = it.task, k = kindOf(t);
+  const iv = k === 'custom' ? `alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : SHORT_KIND[k];
+  const done = it.status === 'done';
+  const extra = [t.note ? esc(t.note) : '', sub].filter(Boolean).join(' · ');
+  return `<div class="item ${done ? 'done' : ''}" ${done ? '' : 'data-swipe'} style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
+    <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}"
+      ${done ? 'checked' : ''} aria-label="${esc(t.title)} erledigt"><span class="box"></span></label>
+    <div class="body"><div class="head"><span class="title">${esc(t.title)}</span><span class="kind">${iv}</span></div>
+      ${extra ? `<div class="meta">${extra}</div>` : ''}</div>
   </div>`;
 }
 
@@ -299,45 +338,66 @@ function badgeSetting() {
 
 function viewToday() {
   const items = allItems();
-  const mineOrShared = (i) => i.owner === S.me || i.owner === null;
-  const open = items.filter((i) => i.status === 'due' || i.status === 'overdue');
-  const todo = sortItems(open.filter(mineOrShared));
-  const other = open.filter((i) => i.owner && i.owner !== S.me);
-  const late = todo.filter((i) => i.status === 'overdue');
-  // Jetzt: Tägliches, was heute beginnt oder in den nächsten 2 Tagen endet; der Rest eingeklappt
-  const now = todo.filter((i) => i.status === 'due' && isNow(i));
-  const later = todo.filter((i) => i.status === 'due' && !isNow(i));
-  const need = sortItems(items.filter((i) => mineOrShared(i) && (i.status === 'need' || (i.status === 'done' && kindOf(i.task) === 'asneeded'))));
+  const mine = (i) => i.owner === S.me || i.owner === null;
+  const open = items.filter((i) => i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming');
+  const byDate = (key) => (a, b) => (a[key] || '').localeCompare(b[key] || '')
+    || kindRank(a.task) - kindRank(b.task) || (a.task.order ?? 0) - (b.task.order ?? 0);
+  const sun = weekEnd();
+
+  // Gruppiert nach Frist: Noch offen · Heute · Diese Woche (bis So) · Später
+  const late = open.filter((i) => mine(i) && i.status === 'overdue').sort(byDate('end'));
+  const today = open.filter((i) => mine(i) && i.status === 'due' && i.end <= S.today).sort(byDate('end'));
+  const week = open.filter((i) => mine(i) && i.status === 'due' && i.end > S.today && i.end <= sun).sort(byDate('end'));
+  const later = [
+    ...open.filter((i) => mine(i) && i.status === 'due' && i.end > sun).sort(byDate('end')),
+    ...open.filter((i) => mine(i) && i.status === 'upcoming').sort(byDate('due')),
+  ];
+  const need = sortItems(items.filter((i) => mine(i) && (i.status === 'need' || (i.status === 'done' && kindOf(i.task) === 'asneeded'))));
   const doneToday = items.filter((i) => i.status === 'done' && i.completion?.day === S.today && kindOf(i.task) !== 'asneeded');
 
-  const total = todo.length;
+  // Als Nächstes (für „Alles erledigt“): erste aus „Später“, sonst die früheste kommende eigene oder gemeinsame Aufgabe
+  const next = items.filter((i) => mine(i) && kindOf(i.task) !== 'daily' && kindOf(i.task) !== 'asneeded')
+    .map((i) => ({ title: i.task.title, date: i.status === 'upcoming' ? i.due : i.next }))
+    .filter((n) => n.date && n.date > S.today).sort((a, b) => a.date.localeCompare(b.date))[0];
+
+  const upNext = later[0] ? `${esc(later[0].task.title)}, ${whenText(later[0])}`
+    : next ? `${esc(next.title)}, ab ${dayLabel(next.date)}` : '';
+
   const away = S.hh.away?.[S.me];
   const meAway = away?.from && away.from <= S.today && S.today <= away.to;
   const banner = meAway
     ? `Du bist bis ${fmtDate(away.to)} als abwesend eingetragen. Deine Aufgaben pausieren.`
-    : total
-      ? `${total} ${total === 1 ? 'Aufgabe' : 'Aufgaben'} offen${late.length ? `, davon <span class="ov">${late.length} nicht geschafft</span>` : ''}${later.length ? `, ${later.length} davon haben noch Zeit` : ''}.`
-      : 'Für dich ist heute nichts offen.';
+    : late.length || today.length || week.length
+      ? `Heute ${today.length} · Diese Woche ${week.length}${late.length ? ` · <span class="late">${late.length}</span> noch offen` : ''}`
+      : `Alles erledigt.${upNext ? `<div class="small">Als Nächstes: ${upNext}</div>` : ''}`;
+
+  const group = (title, list, sub = whenText) => (list.length
+    ? `<section class="group"><h2>${title}<span class="count">${list.length}</span></h2>
+      <div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div></section>` : '');
+  const rows = (list, sub = whenText) => `<div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div>`;
+
+  // Andere Personen: ganz unten eingeklappt, je eine Zeile; abhaken = Vertretung
+  const others = S.hh.persons.filter((p) => p.id !== S.me).map((p) => {
+    const list = open.filter((i) => i.owner === p.id && i.status !== 'upcoming')
+      .sort((a, b) => (a.status === 'overdue' ? 0 : 1) - (b.status === 'overdue' ? 0 : 1) || byDate('end')(a, b));
+    return list.length ? fold(`other-${p.id}`, `<span>${pn(p.id)}: ${list.length} offen</span>`, rows(list)) : '';
+  }).join('');
 
   const used = new Set(S.tasks.filter((t) => t.assign === 'A' || t.assign === 'B').map(groupOf));
   const swaps = GROUPS.filter((g) => used.has(g))
     .map((g) => `<div>${GROUP_LABEL[g]}: ${fmtLong(nextSwap(g, S.hh, S.today))}</div>`).join('');
 
-  const byKind = (list) => KINDS.map((k) => {
-    const g = list.filter((i) => kindOf(i.task) === k);
-    return g.length ? section(KIND_LABEL[k], g, { lead: 'shared' }) : '';
-  }).join('');
-
   const rules = (S.hh.rules || []).filter(Boolean);
-  return `<p class="banner ${late.length ? 'has-overdue' : ''}">${banner}</p>
+  return `<div class="banner now">${banner}</div>
     ${rules.length ? fold('rules', `Unsere Abmachungen <span class="count">${rules.length}</span>`,
       `<ul class="rules">${rules.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`) : ''}
-    ${late.length ? section('Nicht geschafft – noch erledigen', late, { lead: 'shared', cls: 'late' }) : ''}
-    ${byKind(now) || (late.length ? '' : '<p class="muted" style="margin-top:24px">Gerade ist nichts dringend.</p>')}
-    ${later.length ? fold('later', `Hat noch Zeit <span class="count">${later.length}</span>`, byKind(later)) : ''}
-    ${need.length ? fold('need', `Bei Bedarf <span class="count">${need.length}</span>`, listOf(need, { lead: 'shared' })) : ''}
-    ${doneToday.length ? fold('done', `Heute erledigt <span class="count">${doneToday.length}</span>`, listOf(doneToday, { lead: 'owner' })) : ''}
-    ${other.length ? `<p class="small" style="margin-top:24px">${pn(other[0].owner)} hat noch ${other.length} offen (unter „Alle“).</p>` : ''}
+    ${group('Noch offen', late)}
+    ${group('Heute', today)}
+    ${group('Diese Woche', week)}
+    ${later.length ? fold('later', `Später <span class="count">${later.length}</span>`, rows(later)) : ''}
+    ${need.length ? fold('need', `Bei Bedarf <span class="count">${need.length}</span>`, rows(need, () => '')) : ''}
+    ${doneToday.length ? fold('done', `Heute erledigt <span class="count">${doneToday.length}</span>`, rows(doneToday, statusText)) : ''}
+    ${others}
     ${swaps ? `<h2>Nächster Pakettausch</h2><div class="small">${swaps}</div>` : ''}`;
 }
 
@@ -681,8 +741,12 @@ function toggle(input) {
       taskId: task.id, title: task.title, key: it.key, slot, forPerson: it.owner,
       by: S.me, at: new Date().toISOString(), day: S.today,
     };
-    input.closest('.item').classList.add('leaving');
-    setTimeout(() => S.store.setCompletion(S.code, id, data), 180);
+    const row = input.closest('.item');
+    row.classList.add('checking');
+    const slide = S.view === 'heute';
+    if (slide) setTimeout(() => row.classList.add('leaving'), 350);
+    setTimeout(() => S.store.setCompletion(S.code, id, data), slide ? 600 : 350);
+    navigator.vibrate?.(10);
     const proxy = it.owner && it.owner !== S.me ? ` für ${esc(person(it.owner).name)}` : '';
     snack(`Erledigt${proxy}.`, () => S.store.removeCompletion(S.code, id));
   } else {
@@ -786,6 +850,41 @@ app.addEventListener('change', (e) => {
   }
   if (d.shared) return updateHH({ sharedDay: { ...S.hh.sharedDay, [d.shared]: +el.value } });
 });
+
+// Wischen nach rechts = abhaken (Zeilen mit data-swipe; senkrechtes Scrollen bleibt frei)
+let swipe = null, swallowClick = false;
+app.addEventListener('pointerdown', (e) => {
+  const row = e.target.closest('.item[data-swipe]');
+  swipe = row && e.isPrimary ? { row, x: e.clientX, y: e.clientY, dx: 0, active: false } : null;
+});
+app.addEventListener('pointermove', (e) => {
+  if (!swipe) return;
+  const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+  if (!swipe.active) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; }
+    if (dx < 12) return;
+    swipe.active = true;
+    swipe.row.classList.add('dragging');
+  }
+  swipe.dx = Math.max(0, dx);
+  swipe.row.style.transform = `translateX(${swipe.dx}px)`;
+});
+function endSwipe() {
+  if (!swipe) return;
+  const { row, dx, active } = swipe;
+  swipe = null;
+  if (!active) return;
+  swallowClick = true;
+  setTimeout(() => { swallowClick = false; }, 300);
+  row.classList.remove('dragging');
+  row.style.transform = '';
+  const input = row.querySelector('input[data-action="toggle"]');
+  if (dx > Math.min(100, row.offsetWidth * 0.3) && input && !input.checked) { input.checked = true; toggle(input); }
+}
+app.addEventListener('pointerup', endSwipe);
+app.addEventListener('pointercancel', endSwipe);
+// nach einem Wischer keinen Klick auf die Checkbox auslösen
+app.addEventListener('click', (e) => { if (swallowClick) { e.preventDefault(); e.stopPropagation(); swallowClick = false; } }, true);
 
 // Auf-/Zuklappen merken (toggle blubbert nicht, daher capture)
 app.addEventListener('toggle', (e) => {
