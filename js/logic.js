@@ -24,7 +24,7 @@ export function isoWeek(n) {
 
 // ---------- Intervalle ----------
 
-export const KINDS = ['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'halfyear', 'yearly', 'custom'];
+export const KINDS = ['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'halfyear', 'yearly', 'custom', 'asneeded'];
 
 export const PRESETS = {
   daily: { n: 1, unit: 'day' },
@@ -34,6 +34,7 @@ export const PRESETS = {
   quarterly: { n: 3, unit: 'month' },
   halfyear: { n: 6, unit: 'month' },
   yearly: { n: 12, unit: 'month' },
+  asneeded: { n: 0, unit: 'need' }, // bei Bedarf: kein Rhythmus, nie überfällig
 };
 
 export function kindOf(task) {
@@ -57,7 +58,7 @@ function periodScheme(task, setupDay) {
     case 'weekly':
       return { indexAt: (d) => (monday(d) - 4) / 7, byIndex: (i) => mk(i, i * 7 + 4, i * 7 + 10) };
     case 'biweekly': {
-      const base = monday(setupDay);
+      const base = monday(setupDay) + (task.wk ? 7 : 0); // wk: Rhythmus um eine Woche versetzt
       return {
         indexAt: (d) => Math.floor((d - base) / 14),
         byIndex: (i) => mk(i, base + 14 * i, base + 14 * i + 13),
@@ -119,11 +120,32 @@ export function inSeason(season, month) {
   return from <= to ? month >= from && month <= to : month >= from || month <= to;
 }
 
-// Fälligkeitstag einer Periode (bei halbjährlich/jährlich der gemeinsame Tag),
+// Beginn des Zeitfensters: Längere Intervalle sind erst in der zweiten Hälfte ihrer Periode dran,
+// damit zwischen zwei Durchgängen ungefähr gleich viel Zeit liegt (auch nach einem Pakettausch).
+// alle 2 Wochen → 2. Woche, monatlich → ab dem 15., vierteljährlich → 3. Monat.
+// Mit Wochentag (task.wd, Mo=0 … So=6) ist eine Wochenaufgabe erst ab diesem Tag dran.
+function windowStart(task, period) {
+  const kind = kindOf(task);
+  const [y, m] = ymd(period.start);
+  const wd = Number.isInteger(task.wd) ? task.wd : 0;
+  switch (kind) {
+    case 'daily': return period.start;
+    case 'weekly': return period.start + wd;
+    case 'biweekly': return period.start + 7 + wd;
+    case 'monthly': return dayOf(y, m, 15);
+    case 'quarterly': return dayOf(y, m + 2, 1);
+    default:
+      if (task.unit === 'month') return task.n < 2 ? dayOf(y, m, 15) : dayOf(y, m + Math.floor(task.n / 2), 1);
+      if (task.unit === 'week') return period.start + Math.floor(task.n / 2) * 7;
+      return period.start + Math.floor(task.n / 2);
+  }
+}
+
+// Fälligkeitstag einer Periode (Beginn des Zeitfensters; bei halbjährlich/jährlich der gemeinsame Tag),
 // in die Saison verschoben. null = Periode liegt ganz außerhalb der Saison.
 export function dueDay(task, period, ctx) {
   const kind = kindOf(task);
-  let base = period.start;
+  let base = windowStart(task, period);
   if (kind === 'halfyear' || kind === 'yearly') {
     const [y] = ymd(period.start);
     const sd = ctx.sharedDay;
@@ -187,6 +209,19 @@ export function ownerOf(task, period, due, slot, ctx) {
   }
 }
 
+// ---------- Abwesenheit ----------
+
+// ctx.away = { personId: { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' } }
+// Überschneidet sich die Abwesenheit mit dem Zeitraum [a, b] (Tagesnummern)?
+export function awayDuring(ctx, personId, a, b) {
+  const r = ctx.away?.[personId];
+  return !!(r?.from && r?.to && toDay(r.from) <= b && toDay(r.to) >= a);
+}
+// Pausiert = zuständige Person war weg (bei Gemeinsamem: beide)
+const paused = (ctx, owner, a, b) => (owner === null
+  ? ctx.persons.every((p) => awayDuring(ctx, p.id, a, b))
+  : awayDuring(ctx, owner, a, b));
+
 // ---------- Status ----------
 
 export const completionId = (taskId, key, slot) => `${taskId}__${key}__${slot ?? 'x'}`;
@@ -208,6 +243,7 @@ export function relevantKeys(tasks, ctx, todayStr) {
   const today = toDay(todayStr);
   const keys = new Set();
   for (const t of tasks) {
+    if (kindOf(t) === 'asneeded') { keys.add(`need:${todayStr}`); continue; }
     const { cur, prev } = periodsAround(t, ctx, today);
     if (cur) keys.add(cur.key);
     keys.add(prev.key);
@@ -215,17 +251,39 @@ export function relevantKeys(tasks, ctx, todayStr) {
   return [...keys].sort();
 }
 
+// Aufgaben zählen frühestens ab dem Start des Plans (Einrichtung, in den Optionen änderbar)
+const startOf = (task, ctx) => Math.max(toDay(task.created || ctx.setup), toDay(ctx.setup));
+
+// Bei Bedarf: jeden Tag abhakbar (Schlüssel = Tag), nie fällig oder überfällig
+function evaluateNeed(task, ctx, todayStr, completions) {
+  const today = toDay(todayStr);
+  const key = `need:${todayStr}`;
+  const offseason = !inSeason(task.season, ymd(today)[1]);
+  return slotsOf(task, ctx).map((slot) => {
+    const done = completions.get(completionId(task.id, key, slot)) || null;
+    const owner = task.assign === 'each' ? slot
+      : task.assign === 'A' || task.assign === 'B' ? ownerOf(task, null, today, slot, ctx) : null;
+    return {
+      task, slot, owner, status: offseason ? 'offseason' : done ? 'done' : 'need',
+      key: offseason ? null : key, due: null, end: null, completion: done, next: null,
+    };
+  });
+}
+
 /**
  * Bewertet eine Aufgabe für heute. Liefert pro Slot ein Element:
- * { task, slot, owner, status, key, due, completion, next }
- * status: due | overdue | upcoming | done | idle | offseason
+ * { task, slot, owner, status, key, due, end, completion, next }
+ * status: due | overdue | upcoming | done | idle | offseason | need (bei Bedarf)
  *  - key: Periode, in die ein Abhaken geschrieben wird
- *  - due: Fälligkeitstag (bei overdue der verpasste)
+ *  - due: Fälligkeitstag = Beginn des Zeitfensters (bei overdue der verpasste)
+ *  - end: Ende des Zeitfensters (bei due/upcoming/overdue)
  *  - next: nächster Fälligkeitstag (bei idle/offseason/done)
+ * Tägliches verfällt (wird nie überfällig); während einer Abwesenheit pausiert die Aufgabe.
  */
 export function evaluate(task, ctx, todayStr, completions) {
+  if (kindOf(task) === 'asneeded') return evaluateNeed(task, ctx, todayStr, completions);
   const today = toDay(todayStr);
-  const created = toDay(task.created || ctx.setup);
+  const created = startOf(task, ctx);
   const fixed = usesSharedDay(task);
   const { scheme, i, cur, prev } = periodsAround(task, ctx, today);
   const get = (key, slot) => completions.get(completionId(task.id, key, slot));
@@ -234,7 +292,7 @@ export function evaluate(task, ctx, todayStr, completions) {
   // aktuelle Periode zählt, wenn es die Aufgabe am (festen) Fälligkeitstag schon gab
   const curCounts = curDue !== null && created <= (fixed ? curDue : cur.end);
   const prevDue = dueDay(task, prev, ctx);
-  const prevCounts = prevDue !== null && created <= prevDue;
+  const prevCounts = prevDue !== null && created <= prevDue && kindOf(task) !== 'daily';
 
   const nextDue = () => {
     for (let k = i + 1; k < i + 400; k++) {
@@ -252,14 +310,15 @@ export function evaluate(task, ctx, todayStr, completions) {
   };
 
   return slotsOf(task, ctx).map((slot) => {
-    const item = { task, slot, owner: null, status: 'idle', key: null, due: null, completion: null, next: null };
+    const item = { task, slot, owner: null, status: 'idle', key: null, due: null, end: null, completion: null, next: null };
     if (offseason) {
       item.status = 'offseason';
       item.next = nextDue();
       item.owner = ownerAt(item.next, slot);
       return item;
     }
-    const prevMissed = prevCounts && !get(prev.key, slot);
+    const prevMissed = prevCounts && !get(prev.key, slot)
+      && !paused(ctx, ownerOf(task, prev, prevDue, slot, ctx), prevDue, prev.end);
     if (curCounts) {
       const done = get(cur.key, slot);
       item.key = cur.key;
@@ -267,14 +326,14 @@ export function evaluate(task, ctx, todayStr, completions) {
         Object.assign(item, { status: 'done', completion: done, owner: ownerOf(task, cur, curDue, slot, ctx), due: fromDay(curDue), next: nextDue() });
       } else if (prevMissed) {
         // verpasster Durchgang: einmal überfällig, bei der Person, die ihn verpasst hat
-        Object.assign(item, { status: 'overdue', owner: ownerOf(task, prev, prevDue, slot, ctx), due: fromDay(prevDue) });
+        Object.assign(item, { status: 'overdue', owner: ownerOf(task, prev, prevDue, slot, ctx), due: fromDay(prevDue), end: fromDay(prev.end) });
       } else {
-        Object.assign(item, { status: today < curDue ? 'upcoming' : 'due', owner: ownerOf(task, cur, curDue, slot, ctx), due: fromDay(curDue) });
+        Object.assign(item, { status: today < curDue ? 'upcoming' : 'due', owner: ownerOf(task, cur, curDue, slot, ctx), due: fromDay(curDue), end: fromDay(cur.end) });
       }
       return item;
     }
     if (prevMissed) {
-      Object.assign(item, { status: 'overdue', key: prev.key, owner: ownerOf(task, prev, prevDue, slot, ctx), due: fromDay(prevDue) });
+      Object.assign(item, { status: 'overdue', key: prev.key, owner: ownerOf(task, prev, prevDue, slot, ctx), due: fromDay(prevDue), end: fromDay(prev.end) });
       return item;
     }
     // nichts offen: nächste Fälligkeit, Zuständigkeit der nächsten Periode
@@ -283,4 +342,25 @@ export function evaluate(task, ctx, todayStr, completions) {
     if (prevCounts) item.completion = get(prev.key, slot) || null;
     return item;
   });
+}
+
+// ---------- Kalender ----------
+
+// Zeitfenster einer Aufgabe, die den Bereich [fromStr, toStr] berühren.
+// Liefert [{ task, slot, owner, key, start, end }] (start/end als 'YYYY-MM-DD').
+export function windowsBetween(task, ctx, fromStr, toStr) {
+  if (kindOf(task) === 'asneeded') return [];
+  const from = toDay(fromStr), to = toDay(toStr);
+  const created = startOf(task, ctx);
+  const fixed = usesSharedDay(task);
+  const scheme = periodScheme(task, toDay(ctx.setup));
+  const out = [];
+  for (let k = scheme.indexAt(from) - 1; k <= scheme.indexAt(to) + 1; k++) {
+    const p = scheme.byIndex(k), due = dueDay(task, p, ctx);
+    if (due === null || due > to || p.end < from || created > (fixed ? due : p.end)) continue;
+    for (const slot of slotsOf(task, ctx)) {
+      out.push({ task, slot, owner: ownerOf(task, p, due, slot, ctx), key: p.key, start: fromDay(due), end: fromDay(p.end) });
+    }
+  }
+  return out;
 }

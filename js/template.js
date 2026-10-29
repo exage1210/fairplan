@@ -6,16 +6,21 @@ const M = { n: 1, unit: 'month' };
 const Q = { n: 3, unit: 'month' };
 const H = { n: 6, unit: 'month' };
 const Y = { n: 12, unit: 'month' };
+const N = { n: 0, unit: 'need' }; // bei Bedarf
 
 const t = (title, iv, assign, extra = {}) => ({ title, ...iv, assign, note: '', season: null, ...extra });
 const season = (from, to) => ({ season: { from, to } });
 
+// Abmachungen: Selbstverständliches ohne Abhaken
+export const TEMPLATE_RULES = [
+  'Geschirr und Küche (Herd, Flächen) macht, wer nicht kocht',
+  'Abends kurz gemeinsam aufräumen',
+];
+
 export const TEMPLATE = [
-  t('Geschirr und Küche (Herd, Flächen)', D, 'shared', { note: 'macht, wer nicht kocht' }),
-  t('Aufräumen', D, 'shared'),
-  t('Müll bei Bedarf', D, 'shared'),
+  t('Müll rausbringen', N, 'shared'),
   t('Pflanzen kontrollieren', D, 'alternate'),
-  t('Pflanzen gießen bei Hitze', D, 'alternate', season(6, 8)),
+  t('Pflanzen gießen bei Hitze', N, 'shared', season(6, 8)),
 
   t('Wäsche (waschen, aufhängen, zusammenlegen)', W, 'A'),
   t('Handtücher wechseln', W, 'A'),

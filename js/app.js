@@ -1,19 +1,20 @@
 import {
   KINDS, PRESETS, GROUPS, kindOf, evaluate, relevantKeys, completionId, nextSwap,
-  packageOwners, usesSharedDay, localToday, toDay, groupOf,
+  packageOwners, localToday, toDay, fromDay, groupOf, windowsBetween, awayDuring,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
-import { TEMPLATE } from './template.js';
+import { TEMPLATE, TEMPLATE_RULES } from './template.js';
 
 // ---------- Konstanten & Hilfen ----------
 
 const COLORS = [
-  ['rosa', 'Rosa'], ['blau', 'Blau'], ['gelb', 'Gelb'], ['gruen', 'Grün'],
-  ['rot', 'Rot'], ['schwarz', 'Schwarz'], ['weiss', 'Weiß'], ['gold', 'Gold'],
+  ['rosa', 'Rosa'], ['blau', 'Blau'], ['gelb', 'Gelb'],
+  ['gruen', 'Grün'], ['schwarz', 'Schwarz'], ['weiss', 'Weiß'],
 ];
 const KIND_LABEL = {
   daily: 'Täglich', weekly: 'Wöchentlich', biweekly: 'Alle 2 Wochen', monthly: 'Monatlich',
   quarterly: 'Vierteljährlich', halfyear: 'Halbjährlich', yearly: 'Jährlich', custom: 'Eigenes Intervall',
+  asneeded: 'Bei Bedarf',
 };
 const ASSIGN_LABEL = { A: 'Paket A', B: 'Paket B', shared: 'Gemeinsam', each: 'Pro Person', alternate: 'Abwechselnd' };
 const GROUP_LABEL = { short: 'Täglich bis monatlich', quarter: 'Vierteljährlich', half: 'Halbjährlich', year: 'Jährlich' };
@@ -25,6 +26,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDay: { halfyearMonth: 4, halfyearDay: 15, yearlyMonth: 4, yearlyDay: 15 },
 };
 
+const LOGO = '<h1 class="logo"><span>fair</span><span>plan</span></h1>';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const $ = (sel, root = document) => root.querySelector(sel);
 const ls = {
@@ -41,9 +43,15 @@ function fmtDate(s, withYear) {
 const fmtLong = (s) => asDate(s).toLocaleDateString('de-AT', { day: 'numeric', month: 'long', year: 'numeric' });
 const intervalLabel = (t) => {
   const k = kindOf(t);
-  return k === 'custom' ? `Alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : KIND_LABEL[k];
+  const day = (k === 'weekly' || k === 'biweekly') && Number.isInteger(t.wd) ? ` am ${WEEKDAYS[t.wd]}` : '';
+  return (k === 'custom' ? `Alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : KIND_LABEL[k]) + day;
 };
 const seasonLabel = (s) => `${MONTHS[s.from - 1]}–${MONTHS[s.to - 1]}`;
+const rangeLabel = (a, b) => (a === b ? fmtDate(a) : `${fmtDate(a)}–${fmtDate(b)}`);
+const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const WEEKDAYS_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+const weekdayOf = (s) => (asDate(s).getDay() + 6) % 7; // Mo=0
+const fmtWd = (s) => `${WEEKDAYS[weekdayOf(s)]} ${fmtDate(s)}`;
 
 // ---------- Zustand ----------
 
@@ -53,6 +61,8 @@ const S = {
   me: ls.get('me'),
   view: 'heute',
   filter: 'all',
+  calMonth: null, // 'YYYY-MM', null = aktueller Monat
+  calDay: null, // ausgewählter Tag, null = heute
   today: localToday(),
   hh: undefined, // undefined = lädt, null = nicht gefunden
   tasks: [],
@@ -64,6 +74,10 @@ const S = {
   compSub: null,
   compSig: '',
   histSub: null,
+  daySub: null, // Erledigungen im Kalenderzeitraum
+  daySig: '',
+  dayComps: [],
+  open: {}, // aufgeklappte Bereiche (details) über Neuzeichnen hinweg
   pendingRender: false,
 };
 
@@ -85,7 +99,7 @@ async function init() {
     S.store = await openStore();
   } catch (e) {
     console.error(e);
-    app.innerHTML = `<header class="top"><h1>Fairplan</h1></header>
+    app.innerHTML = `<header class="top">${LOGO}</header>
       <p>Keine Verbindung zur Datenbank. Beim allerersten Start muss das Gerät online sein.</p>
       <div class="btnrow"><button class="btn primary" onclick="location.reload()">Erneut versuchen</button></div>`;
     return;
@@ -139,6 +153,17 @@ function watchHistory(on) {
   if (!on && S.histSub) { S.histSub(); S.histSub = null; }
 }
 
+// Erledigungen für den sichtbaren Kalenderzeitraum laden; null = abmelden
+function watchDays(range) {
+  const sig = range ? range.join('|') : '';
+  if (sig === S.daySig) return;
+  S.daySig = sig;
+  S.daySub?.();
+  S.daySub = null;
+  S.dayComps = [];
+  if (range) S.daySub = S.store.watchDays(S.code, range[0], range[1], (list) => { S.dayComps = list; render(); });
+}
+
 // ---------- Rendern ----------
 
 // Nicht neu zeichnen, während jemand in ein Feld tippt
@@ -157,22 +182,24 @@ function render() {
     return;
   }
   if (S.hh === null) {
-    app.innerHTML = `<header class="top"><h1>Fairplan</h1></header>
+    app.innerHTML = `<header class="top">${LOGO}</header>
       <p>Dieser Haushalt wurde nicht gefunden.</p>
       <div class="btnrow"><button class="btn primary" data-action="leave">Neu einrichten</button></div>`;
     return;
   }
   if (!person(S.me)) return renderWhoAmI();
 
-  const views = { heute: viewToday, alle: viewAll, verlauf: viewHistory, einstellungen: viewSettings };
+  const views = { heute: viewToday, alle: viewAll, kalender: viewCalendar, verlauf: viewHistory, einstellungen: viewSettings };
   watchHistory(S.view === 'verlauf');
-  const tabs = [['heute', 'Heute'], ['alle', 'Alle'], ['verlauf', 'Verlauf'], ['einstellungen', 'Einstellungen']]
+  watchDays(S.view === 'kalender' ? calRange() : S.view === 'verlauf' ? [`${S.today.slice(0, 7)}-01`, S.today] : null);
+  const tabs = [['heute', 'Heute'], ['alle', 'Alle'], ['kalender', 'Kalender'], ['verlauf', 'Verlauf'], ['einstellungen', 'Optionen']]
     .map(([v, l]) => `<button data-view="${v}" ${S.view === v ? 'aria-current="page"' : ''}>${l}</button>`).join('');
   const scroll = window.scrollY;
-  app.innerHTML = `<header class="top"><h1>Fairplan</h1><span class="who">${pn(S.me)}</span></header>
+  app.innerHTML = `<header class="top">${LOGO}<span class="who">${pn(S.me)}</span></header>
     ${views[S.view]()}
     <nav class="tabs">${tabs}</nav>`;
   window.scrollTo(0, scroll);
+  updateBadge();
 }
 
 function allItems() {
@@ -195,77 +222,243 @@ function ownerText(it) {
 function statusText(it) {
   const c = it.completion;
   switch (it.status) {
-    case 'overdue': return `<span class="ov">Überfällig</span> seit ${fmtDate(it.due)}`;
-    case 'due': return usesSharedDay(it.task) ? `fällig seit ${fmtDate(it.due)}` : '';
-    case 'upcoming': return `fällig ab ${fmtDate(it.due)}`;
+    case 'overdue': return `war dran ${rangeLabel(it.due, it.end)} · <span class="ov">noch erledigen</span>`;
+    case 'due': return kindOf(it.task) === 'daily' ? '' : `dran bis ${fmtDate(it.end)}`;
+    case 'upcoming': return `dran ${rangeLabel(it.due, it.end)}`;
     case 'done': {
       const proxy = c.forPerson && c.forPerson !== c.by ? ` für ${esc(person(c.forPerson)?.name ?? '?')}` : '';
       return `erledigt von ${byName(c.by)}${proxy}, ${fmtDate(c.day)}`;
     }
+    case 'need': return '';
     case 'offseason': return `Saison ${seasonLabel(it.task.season)}${it.next ? ` · ab ${fmtDate(it.next)}` : ''}`;
     default: return it.next ? `nächste Fälligkeit ${fmtDate(it.next)}` : '';
   }
 }
 
-function itemRow(it, { showOwner = false } = {}) {
+// lead: was vor dem Status steht – 'owner' (Zuständigkeit), 'shared' (nur „Gemeinsam“) oder 'interval'
+function itemRow(it, { lead = 'interval' } = {}) {
   const p = person(it.owner);
-  const active = ['due', 'overdue', 'upcoming', 'done'].includes(it.status);
-  const meta = [showOwner ? ownerText(it) : intervalLabel(it.task), statusText(it)]
-    .filter(Boolean).join(' · ');
+  const active = ['due', 'overdue', 'upcoming', 'done', 'need'].includes(it.status);
+  const first = lead === 'owner' ? ownerText(it) : lead === 'shared' ? (it.owner === null ? 'Gemeinsam' : '') : intervalLabel(it.task);
+  const meta = [first, statusText(it)].filter(Boolean).join(' · ');
   const cls = [it.status, active ? '' : 'inactive'].join(' ');
   return `<div class="item ${cls}" style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
     <span class="strip"></span>
     <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(it.task.id)}" data-slot="${esc(it.slot ?? '')}"
       ${it.status === 'done' ? 'checked' : ''} ${active ? '' : 'disabled'} aria-label="${esc(it.task.title)} erledigt"><span class="box"></span></label>
-    <div class="body"><div class="title">${esc(it.task.title)}</div>
+    <div class="body">${it.status === 'overdue' ? '<span class="badge">Nicht geschafft</span>' : ''}<div class="title">${esc(it.task.title)}</div>
       ${it.task.note ? `<div class="note">${esc(it.task.note)}</div>` : ''}
       ${meta ? `<div class="meta">${meta}</div>` : ''}</div>
   </div>`;
 }
 
+// Aufklappbarer Bereich; Zustand bleibt beim Neuzeichnen erhalten
+function fold(key, summary, body) {
+  return `<details class="fold" data-fold="${key}" ${S.open[key] ? 'open' : ''}><summary>${summary}</summary>${body}</details>`;
+}
+
+// Erledigt pro Person (für die Fairness-Bilanz)
+function balance(list) {
+  return S.hh.persons.map((p) => `${pn(p.id)} <strong>${list.filter((c) => c.by === p.id).length}</strong>`).join(' · ');
+}
+
+function section(title, items, { lead, cls = '' } = {}) {
+  return `<section class="group ${cls}"><h2>${esc(title)}<span class="count">${items.length}</span></h2>${listOf(items, { lead })}</section>`;
+}
+
 const listOf = (items, opts) => (items.length ? `<div class="list">${items.map((i) => itemRow(i, opts)).join('')}</div>` : '');
 
+// Jetzt dran: Tägliches, was heute beginnt oder in den nächsten 2 Tagen endet
+const isNow = (i) => kindOf(i.task) === 'daily' || i.due === S.today || i.end <= fromDay(toDay(S.today) + 2);
+
+// Zahl am App-Icon: nicht Geschafftes + jetzt dran (eigenes und gemeinsames), ohne Tägliches
+function badgeCount() {
+  return allItems().filter((i) => (i.owner === S.me || i.owner === null) && kindOf(i.task) !== 'daily'
+    && (i.status === 'overdue' || (i.status === 'due' && isNow(i)))).length;
+}
+let lastBadge = -1;
+function updateBadge() {
+  if (!('setAppBadge' in navigator)) return;
+  const n = badgeCount();
+  if (n === lastBadge) return;
+  lastBadge = n;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+}
+
+function badgeSetting() {
+  if (!('setAppBadge' in navigator)) {
+    return '<p class="small">Hier nicht möglich. Am iPhone geht das nur, wenn Fairplan vom Homescreen geöffnet wird (ab iOS 16.4).</p>';
+  }
+  const perm = 'Notification' in window ? Notification.permission : 'granted';
+  if (perm === 'granted') return `<p class="small">Eingeschaltet. Gerade: ${badgeCount()}.</p>`;
+  if (perm === 'denied') return '<p class="small">Mitteilungen sind gesperrt. Am iPhone: Einstellungen → Mitteilungen → Fairplan → Mitteilungen erlauben.</p>';
+  return `<p class="small">Am iPhone muss man dafür Mitteilungen erlauben (es kommen keine Nachrichten, nur die Zahl).</p>
+    <div class="btnrow"><button class="btn" data-action="badge">Zahl am App-Icon einschalten</button></div>`;
+}
+
 function viewToday() {
-  const open = allItems().filter((i) => i.status === 'due' || i.status === 'overdue');
-  const mine = sortItems(open.filter((i) => i.owner === S.me));
-  const shared = sortItems(open.filter((i) => i.owner === null));
+  const items = allItems();
+  const mineOrShared = (i) => i.owner === S.me || i.owner === null;
+  const open = items.filter((i) => i.status === 'due' || i.status === 'overdue');
+  const todo = sortItems(open.filter(mineOrShared));
   const other = open.filter((i) => i.owner && i.owner !== S.me);
-  const overdue = [...mine, ...shared].filter((i) => i.status === 'overdue').length;
-  const total = mine.length + shared.length;
-  const banner = total
-    ? `${total} ${total === 1 ? 'Aufgabe' : 'Aufgaben'} offen${overdue ? `, davon <span class="ov">${overdue} überfällig</span>` : ''}.`
-    : 'Für dich ist heute nichts offen.';
+  const late = todo.filter((i) => i.status === 'overdue');
+  // Jetzt: Tägliches, was heute beginnt oder in den nächsten 2 Tagen endet; der Rest eingeklappt
+  const now = todo.filter((i) => i.status === 'due' && isNow(i));
+  const later = todo.filter((i) => i.status === 'due' && !isNow(i));
+  const need = sortItems(items.filter((i) => mineOrShared(i) && (i.status === 'need' || (i.status === 'done' && kindOf(i.task) === 'asneeded'))));
+  const doneToday = items.filter((i) => i.status === 'done' && i.completion?.day === S.today && kindOf(i.task) !== 'asneeded');
+
+  const total = todo.length;
+  const away = S.hh.away?.[S.me];
+  const meAway = away?.from && away.from <= S.today && S.today <= away.to;
+  const banner = meAway
+    ? `Du bist bis ${fmtDate(away.to)} als abwesend eingetragen. Deine Aufgaben pausieren.`
+    : total
+      ? `${total} ${total === 1 ? 'Aufgabe' : 'Aufgaben'} offen${late.length ? `, davon <span class="ov">${late.length} nicht geschafft</span>` : ''}${later.length ? `, ${later.length} davon haben noch Zeit` : ''}.`
+      : 'Für dich ist heute nichts offen.';
 
   const used = new Set(S.tasks.filter((t) => t.assign === 'A' || t.assign === 'B').map(groupOf));
   const swaps = GROUPS.filter((g) => used.has(g))
     .map((g) => `<div>${GROUP_LABEL[g]}: ${fmtLong(nextSwap(g, S.hh, S.today))}</div>`).join('');
 
-  return `<p class="banner ${overdue ? 'has-overdue' : ''}">${banner}</p>
-    <h2>${esc(person(S.me).name)}</h2>
-    ${listOf(mine) || '<p class="muted">Nichts offen.</p>'}
-    <h2>Gemeinsam</h2>
-    ${listOf(shared) || '<p class="muted">Nichts offen.</p>'}
+  const byKind = (list) => KINDS.map((k) => {
+    const g = list.filter((i) => kindOf(i.task) === k);
+    return g.length ? section(KIND_LABEL[k], g, { lead: 'shared' }) : '';
+  }).join('');
+
+  const rules = (S.hh.rules || []).filter(Boolean);
+  return `<p class="banner ${late.length ? 'has-overdue' : ''}">${banner}</p>
+    ${rules.length ? fold('rules', `Unsere Abmachungen <span class="count">${rules.length}</span>`,
+      `<ul class="rules">${rules.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`) : ''}
+    ${late.length ? section('Nicht geschafft – noch erledigen', late, { lead: 'shared', cls: 'late' }) : ''}
+    ${byKind(now) || (late.length ? '' : '<p class="muted" style="margin-top:24px">Gerade ist nichts dringend.</p>')}
+    ${later.length ? fold('later', `Hat noch Zeit <span class="count">${later.length}</span>`, byKind(later)) : ''}
+    ${need.length ? fold('need', `Bei Bedarf <span class="count">${need.length}</span>`, listOf(need, { lead: 'shared' })) : ''}
+    ${doneToday.length ? fold('done', `Heute erledigt <span class="count">${doneToday.length}</span>`, listOf(doneToday, { lead: 'owner' })) : ''}
     ${other.length ? `<p class="small" style="margin-top:24px">${pn(other[0].owner)} hat noch ${other.length} offen (unter „Alle“).</p>` : ''}
     ${swaps ? `<h2>Nächster Pakettausch</h2><div class="small">${swaps}</div>` : ''}`;
 }
 
-function viewAll() {
+function filterBar() {
   const [p1, p2] = S.hh.persons;
   const f = S.filter;
-  const filters = [['all', 'Alle'], [p1.id, p1.name], [p2.id, p2.name], ['shared', 'Gemeinsam']]
+  return [['all', 'Alle'], [p1.id, p1.name], [p2.id, p2.name], ['shared', 'Gemeinsam']]
     .map(([v, l]) => `<button data-filter="${esc(v)}" aria-pressed="${f === v}">${esc(l)}</button>`).join('');
+}
+
+function viewAll() {
+  const f = S.filter;
   const items = allItems().filter((i) => f === 'all' || (f === 'shared' ? i.owner === null : i.owner === f));
   const groups = KINDS.map((k) => {
-    const g = items.filter((i) => kindOf(i.task) === k);
-    return g.length ? `<h2>${KIND_LABEL[k]}</h2>${listOf(g, { showOwner: true })}` : '';
+    const g = sortItems(items.filter((i) => kindOf(i.task) === k));
+    return g.length ? section(KIND_LABEL[k], g, { lead: 'owner' }) : '';
   }).join('');
-  return `<div class="filters">${filters}</div>${groups || '<p class="muted" style="margin-top:24px">Keine Aufgaben.</p>'}`;
+  return `<div class="filters">${filterBar()}</div>${groups || '<p class="muted" style="margin-top:24px">Keine Aufgaben.</p>'}`;
+}
+
+// Sichtbarer Kalenderzeitraum: ganze Wochen (Mo–So) rund um den Monat
+function calRange() {
+  const month = S.calMonth || S.today.slice(0, 7);
+  const [y, m] = month.split('-').map(Number);
+  const first = toDay(`${month}-01`);
+  const last = first + new Date(y, m, 0).getDate() - 1;
+  return [fromDay(first - weekdayOf(fromDay(first))), fromDay(last + 6 - weekdayOf(fromDay(last)))];
+}
+
+const paused = (w) => (w.owner === null
+  ? S.hh.persons.every((p) => awayDuring(S.hh, p.id, toDay(w.start), toDay(w.end)))
+  : awayDuring(S.hh, w.owner, toDay(w.start), toDay(w.end)));
+const colorOf = (id) => { const p = person(id); return p ? `var(--c-${p.color})` : 'var(--shared)'; };
+
+// Monatsraster ab Montag. Oben je Tag: Punkte = ab diesem Tag ist eine Aufgabe dran (Farbe = zuständig),
+// unten: ✓ und Anzahl, was jede Person an diesem Tag erledigt hat.
+// Darunter für den gewählten Tag: was dran ist (mit Zeitraum) und was wer erledigt hat.
+function viewCalendar() {
+  const f = S.filter;
+  const month = S.calMonth || S.today.slice(0, 7);
+  const sel = S.calDay || S.today;
+  const first = toDay(`${month}-01`);
+  const [from, to] = calRange();
+  const gridStart = toDay(from), gridEnd = toDay(to);
+
+  const match = (w) => f === 'all' || (f === 'shared' ? w.owner === null : w.owner === f);
+  const wins = S.tasks
+    .flatMap((t) => windowsBetween(t, S.hh, from, fromDay(Math.max(gridEnd, toDay(sel))))).filter(match);
+  const starts = new Map();
+  for (const w of wins) { if (!starts.has(w.start)) starts.set(w.start, []); starts.get(w.start).push(w); }
+
+  const doneMatch = (c) => f === 'all' || (f === 'shared' ? c.forPerson == null : c.by === f);
+  const doneList = S.dayComps.filter(doneMatch);
+  const doneOn = new Map();
+  for (const c of doneList) { if (!doneOn.has(c.day)) doneOn.set(c.day, []); doneOn.get(c.day).push(c); }
+  const doneById = new Map([...S.comps, ...S.dayComps.map((c) => [c.id, c])]);
+
+  const cells = [];
+  for (let d = gridStart; d <= gridEnd; d++) {
+    const ds = fromDay(d);
+    const ws = starts.get(ds) || [];
+    const dots = (ws.some((w) => kindOf(w.task) === 'daily') ? '<i class="daily"></i>' : '')
+      + ws.filter((w) => kindOf(w.task) !== 'daily').map((w) => `<i style="--pc:${colorOf(w.owner)}"></i>`).join('');
+    const counts = new Map();
+    for (const c of doneOn.get(ds) || []) counts.set(c.by, (counts.get(c.by) || 0) + 1);
+    const marks = S.hh.persons.filter((p) => counts.has(p.id))
+      .map((p) => `<b class="by" data-c="${p.color}">✓${counts.get(p.id)}</b>`).join('');
+    const out = ds.slice(0, 7) !== month;
+    const cls = [out ? 'out' : '', ds === S.today ? 'today' : '', ds === sel ? 'sel' : ''].join(' ');
+    cells.push(`<button class="day ${cls}" data-cal-day="${ds}"><span>${asDate(ds).getDate()}</span><span class="dots">${dots}</span><span class="marks">${marks}</span></button>`);
+  }
+
+  const relevant = new Set(relevantKeys(S.tasks, S.hh, S.today));
+  const onDay = wins.filter((w) => w.start <= sel && sel <= w.end);
+  const rows = KINDS.map((k) => {
+    const g = onDay.filter((w) => kindOf(w.task) === k);
+    if (!g.length) return '';
+    const list = g.map((w) => {
+      const done = doneById.get(completionId(w.task.id, w.key, w.slot));
+      const pause = !done && paused(w);
+      const missed = !done && !pause && kindOf(w.task) !== 'daily' && w.end < S.today && relevant.has(w.key);
+      const state = done ? ` · ✓ ${byName(done.by)}, ${fmtWd(done.day)}` : pause ? ' · pausiert (abwesend)' : missed ? ' · <span class="ov">nicht geschafft</span>' : '';
+      return `<div class="item ${missed ? 'overdue' : done ? 'done' : ''}" style="--pc:${colorOf(w.owner)}">
+        <span class="strip"></span>
+        <div class="body cal"><div class="title">${esc(w.task.title)}</div>
+          <div class="meta">${w.owner === null ? 'Gemeinsam' : pn(w.owner)} · ${w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)} bis ${fmtWd(w.end)}`}${state}</div></div>
+      </div>`;
+    }).join('');
+    return `<section class="group"><h2>${KIND_LABEL[k]}<span class="count">${g.length}</span></h2><div class="list">${list}</div></section>`;
+  }).join('');
+
+  const doneSel = (doneOn.get(sel) || []).slice().sort((a, b) => a.at.localeCompare(b.at));
+  const doneRows = doneSel.map((c) => {
+    const time = new Date(c.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
+    const proxy = c.forPerson && c.forPerson !== c.by ? ` für ${esc(person(c.forPerson)?.name ?? '?')}` : '';
+    return `<div class="hist"><span class="time">${time}</span><div><div>${esc(c.title)}</div>
+      <div class="meta">${byName(c.by)}${proxy}</div></div></div>`;
+  }).join('');
+
+  const title = asDate(`${month}-01`).toLocaleDateString('de-AT', { month: 'long', year: 'numeric' });
+  const selTitle = asDate(sel).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
+  return `<div class="filters">${filterBar()}</div>
+    <div class="calhead">
+      <button class="navbtn" data-cal-month="-1" aria-label="Voriger Monat">‹</button>
+      <strong>${title}</strong>
+      <button class="navbtn" data-cal-month="1" aria-label="Nächster Monat">›</button>
+    </div>
+    <div class="cal-grid">${WEEKDAYS.map((w) => `<span class="wd">${w}</span>`).join('')}${cells.join('')}</div>
+    <p class="small">Punkt = ab diesem Tag dran (Farbe = wer, grauer Ring = Tägliches). ✓ = so viel hat die Person an dem Tag erledigt.</p>
+    <p class="banner">Im ${esc(asDate(`${month}-01`).toLocaleDateString('de-AT', { month: 'long' }))} erledigt: ${balance(S.dayComps.filter((c) => c.day.startsWith(month)))}</p>
+    <h2 class="calday">${esc(selTitle)}</h2>
+    <section class="group"><h2>Erledigt<span class="count">${doneSel.length}</span></h2>
+      ${doneRows || '<p class="muted">An diesem Tag nichts erledigt.</p>'}</section>
+    ${rows ? `<h2 class="calday">Dran</h2>${rows}` : '<p class="muted">Nichts dran.</p>'}`;
 }
 
 function viewHistory() {
-  if (!S.history.length) return '<h2>Verlauf</h2><p class="muted">Noch nichts erledigt.</p>';
+  const monthName = asDate(S.today).toLocaleDateString('de-AT', { month: 'long' });
+  const head = `<p class="banner">Im ${monthName} erledigt: ${balance(S.dayComps)}</p>`;
+  if (!S.history.length) return `${head}<h2>Verlauf</h2><p class="muted">Noch nichts erledigt.</p>`;
   let last = '';
-  return S.history.map((c) => {
+  return head + S.history.map((c) => {
     const d = c.day;
     const head = d !== last ? `<h2>${asDate(d).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</h2>` : '';
     last = d;
@@ -299,6 +492,10 @@ function viewSettings() {
     : '<p class="muted">Noch keine Aufgaben.</p>';
 
   return `
+    <h2>Zahl am App-Icon</h2>
+    <p class="small">Zeigt, was bei dir nicht geschafft oder jetzt dran ist (ohne Tägliches).</p>
+    ${badgeSetting()}
+
     <h2>Dieses Gerät</h2>
     <p class="small">Ich bin</p>
     <div class="btnrow">${hh.persons.map((p) => `<button class="btn" data-me="${p.id}" aria-pressed="${S.me === p.id}">${esc(p.name)}</button>`).join('')}</div>
@@ -316,6 +513,24 @@ function viewSettings() {
 
     <h2>Personen</h2>
     ${persons}
+
+    <h2>Abwesend (Urlaub, krank)</h2>
+    <p class="small">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „nicht geschafft“. Gemeinsames pausiert nur, wenn beide weg sind.</p>
+    ${hh.persons.map((p) => {
+      const a = hh.away?.[p.id] || {};
+      return `<div class="setting"><p>${pn(p.id)}</p>
+        <div class="inline"><label class="field">von<input type="date" data-away-from="${p.id}" value="${esc(a.from || '')}"></label>
+          <label class="field">bis<input type="date" data-away-to="${p.id}" value="${esc(a.to || '')}"></label></div>
+        ${a.from || a.to ? `<button class="btn" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}</div>`;
+    }).join('')}
+
+    <h2>Start des Plans</h2>
+    <label class="field">Ab diesem Tag zählen die Aufgaben<input type="date" data-start value="${esc(hh.setup)}"></label>
+    <p class="small">Standard ist der Tag der Einrichtung. Davor ist nichts „nicht geschafft“. Auch der 2-Wochen-Rhythmus und der Pakettausch zählen ab hier.</p>
+
+    <h2>Unsere Abmachungen</h2>
+    <p class="small">Selbstverständliches, das ihr nicht abhaken wollt – z. B. „Geschirr macht, wer nicht kocht“. Eine Abmachung pro Zeile. Steht bei „Heute“ oben zum Aufklappen und zählt nicht in der Bilanz.</p>
+    <label class="field"><textarea data-rules rows="5" placeholder="Geschirr macht, wer nicht kocht&#10;Abends kurz aufräumen">${esc((hh.rules || []).join('\n'))}</textarea></label>
 
     <h2>Aufgaben</h2>
     <div class="btnrow"><button class="btn block" data-edit="">Aufgabe hinzufügen</button></div>
@@ -340,7 +555,7 @@ function viewSettings() {
 }
 
 function renderWhoAmI() {
-  app.innerHTML = `<header class="top"><h1>Fairplan</h1></header>
+  app.innerHTML = `<header class="top">${LOGO}</header>
     <h2>Wer bist du?</h2>
     <p>Einmalig pro Gerät. Deine Aufgaben stehen danach zuerst.</p>
     <div class="btnrow">${S.hh.persons.map((p) => `<button class="btn block" data-me="${p.id}">${pn(p.id)}</button>`).join('')}</div>`;
@@ -376,7 +591,7 @@ function renderSetup() {
   } else if (st.step === 'template') {
     body = `<h2>Schritt 2 von 2 · Vorlage</h2>
       <div class="rows">
-        <button class="rowbtn" data-setup="create-template"><span>Vorschlag für 2 Personen<br><span class="meta">${TEMPLATE.length} Aufgaben: Tägliches, Paket A und B, halbjährlich und jährlich gemeinsam</span></span></button>
+        <button class="rowbtn" data-setup="create-template"><span>Vorschlag für 2 Personen<br><span class="meta">${TEMPLATE.length} Aufgaben (Paket A und B, halbjährlich und jährlich gemeinsam) und ein paar Abmachungen</span></span></button>
         <button class="rowbtn" data-setup="create-empty"><span>Leer starten<br><span class="meta">Aufgaben selbst anlegen</span></span></button>
       </div>${err}
       <div class="btnrow"><button class="btn" data-setup="persons">Zurück</button></div>`;
@@ -389,7 +604,7 @@ function renderSetup() {
       <p class="small">Die zweite Person öffnet Fairplan auf ihrem Gerät und tritt mit diesem Code bei. Du findest ihn jederzeit in den Einstellungen.</p>
       <div class="btnrow"><button class="btn" data-action="copy">Code kopieren</button><button class="btn primary" data-setup="done">Weiter</button></div>`;
   }
-  app.innerHTML = `<header class="top"><h1>Fairplan</h1></header>${body}`;
+  app.innerHTML = `<header class="top">${LOGO}</header>${body}`;
 }
 
 async function createHousehold(withTemplate) {
@@ -400,6 +615,7 @@ async function createHousehold(withTemplate) {
     ...DEFAULT_HOUSEHOLD,
     setup: today,
     persons: st.persons.map((p, i) => ({ id: `p${i + 1}`, name: p.name.trim(), color: p.color })),
+    rules: withTemplate ? TEMPLATE_RULES : [],
     createdAt: new Date().toISOString(),
   };
   const tasks = withTemplate ? TEMPLATE.map((t, i) => ({ ...t, id: newId(), created: today, order: i })) : [];
@@ -483,8 +699,20 @@ app.addEventListener('click', (e) => {
   const el = e.target.closest('button, [data-action]');
   if (!el || el.disabled) return;
   const d = el.dataset;
-  if (d.view) { S.view = d.view; window.scrollTo(0, 0); return render(); }
+  if (d.view) {
+    if (d.view === 'kalender') { S.calMonth = null; S.calDay = null; }
+    S.view = d.view; window.scrollTo(0, 0); return render();
+  }
   if (d.filter) { S.filter = d.filter; return render(); }
+  if (d.awayClear) return updateHH({ away: { ...(S.hh.away || {}), [d.awayClear]: {} } });
+  if (d.calDay) { S.calDay = d.calDay; S.calMonth = d.calDay.slice(0, 7); return render(); }
+  if (d.calMonth) {
+    const [y, m] = (S.calMonth || S.today.slice(0, 7)).split('-').map(Number);
+    const t = new Date(y, m - 1 + +d.calMonth, 1);
+    S.calMonth = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`;
+    S.calDay = S.calMonth === S.today.slice(0, 7) ? null : `${S.calMonth}-01`;
+    return render();
+  }
   if (d.me) { S.me = d.me; ls.set('me', d.me); return render(); }
   if (d.themeSet) { setTheme(d.themeSet); return render(); }
   if (d.edit !== undefined && el.matches('[data-edit]')) return openEditor(d.edit);
@@ -496,6 +724,9 @@ app.addEventListener('click', (e) => {
   if (d.setup) return setupAction(d.setup);
   switch (d.action) {
     case 'copy': return copyCode();
+    case 'badge':
+      Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});
+      return;
     case 'flip': updateHH({ swapped: !S.hh.swapped }); return snack('Zuteilung umgedreht.');
     case 'leave':
       if (!confirm('Haushalt auf diesem Gerät abmelden?')) return;
@@ -529,8 +760,34 @@ app.addEventListener('change', (e) => {
     return updateHH({ persons });
   }
   if (d.rotation) return updateHH({ rotation: { ...S.hh.rotation, [d.rotation]: +el.value } });
+  if (d.start !== undefined) {
+    const ok = /^\d{4}-\d{2}-\d{2}$/.test(el.value) && el.value !== S.hh.setup
+      && confirm('Start ändern? Der 2-Wochen-Rhythmus und der Pakettausch verschieben sich mit. Schon Abgehaktes im laufenden 2-Wochen-Block kann dadurch wieder offen erscheinen.');
+    if (ok) { updateHH({ setup: el.value }); snack('Start geändert.'); }
+    else el.value = S.hh.setup;
+    return render();
+  }
+  if (d.awayFrom || d.awayTo) {
+    const id = d.awayFrom || d.awayTo;
+    const cur = { ...(S.hh.away?.[id] || {}), [d.awayFrom ? 'from' : 'to']: el.value };
+    if (cur.from && !cur.to) cur.to = cur.from;
+    if (cur.to && !cur.from) cur.from = cur.to;
+    if (cur.from && cur.to && cur.to < cur.from) [cur.from, cur.to] = [cur.to, cur.from];
+    return updateHH({ away: { ...(S.hh.away || {}), [id]: cur } });
+  }
+  if (d.rules !== undefined) {
+    const rules = el.value.split('\n').map((r) => r.trim()).filter(Boolean).slice(0, 50);
+    updateHH({ rules });
+    return snack('Abmachungen gespeichert.');
+  }
   if (d.shared) return updateHH({ sharedDay: { ...S.hh.sharedDay, [d.shared]: +el.value } });
 });
+
+// Auf-/Zuklappen merken (toggle blubbert nicht, daher capture)
+app.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (d.dataset?.fold) S.open[d.dataset.fold] = d.open;
+}, true);
 
 app.addEventListener('input', (e) => {
   const d = e.target.dataset;
@@ -554,6 +811,9 @@ function openEditor(id) {
     <label class="field">Intervall<select name="kind">${KINDS.map((k) => opt(k, k === 'custom' ? 'Eigenes: alle X Tage/Wochen/Monate' : KIND_LABEL[k], kind)).join('')}</select></label>
     <div class="inline" data-custom><span>alle</span><input type="number" name="n" min="1" max="999" value="${t.n}" inputmode="numeric">
       <select name="unit">${Object.entries(UNIT_LABEL).map(([u, l]) => opt(u, l[1], t.unit)).join('')}</select></div>
+    <label class="field" data-day>Tag<select name="wd">${opt('', 'Egal – die ganze Woche', t.wd ?? '')}${WEEKDAYS_LONG.map((w, i) => opt(i, `am ${w}`, t.wd ?? '')).join('')}</select></label>
+    <label class="field" data-wk>Welche Woche<select name="wk">${opt(0, 'A', t.wk ? 1 : 0)}${opt(1, 'B', t.wk ? 1 : 0)}</select></label>
+    <p class="small" data-next></p>
     <label class="field">Zuteilung<select name="assign">${Object.entries(ASSIGN_LABEL).map(([v, l]) => opt(v, v === 'A' || v === 'B' ? `${l} (rotiert)` : v === 'shared' ? `${l} (jede/r darf abhaken)` : v === 'alternate' ? `${l} (jede Periode die andere Person)` : l, t.assign)).join('')}</select></label>
     <label class="cb"><input type="checkbox" name="hasSeason" ${t.season ? 'checked' : ''}> Nur in einer Saison</label>
     <div class="inline" data-season><select name="from">${months(t.season?.from ?? 3)}</select><span>bis</span><select name="to">${months(t.season?.to ?? 10)}</select></div>
@@ -566,11 +826,37 @@ function openEditor(id) {
   document.body.style.overflow = 'hidden';
   const form = $('#taskForm');
   const f = form.elements;
+  // Entwurf aus dem Formular, für die Vorschau der nächsten Termine
+  const draft = (over = {}) => {
+    const k = f.kind.value;
+    const iv = k === 'custom' ? { n: Math.max(1, Math.min(999, parseInt(f.n.value, 10) || 1)), unit: f.unit.value } : PRESETS[k];
+    const day = k === 'weekly' || k === 'biweekly';
+    return {
+      id: 'x', ...iv, assign: f.assign.value, season: f.hasSeason.checked ? { from: +f.from.value, to: +f.to.value } : null,
+      wd: day && f.wd.value !== '' ? +f.wd.value : null, wk: k === 'biweekly' ? +f.wk.value : 0,
+      created: t.created || S.today, ...over,
+    };
+  };
+  const upcoming = (task, n) => windowsBetween(task, S.hh, S.today, fromDay(toDay(S.today) + 400))
+    .filter((w, i, a) => w.end >= S.today && a.findIndex((x) => x.key === w.key) === i).slice(0, n);
   const sync = () => {
     const k = f.kind.value;
+    const day = k === 'weekly' || k === 'biweekly';
+    $('[data-day]', form).hidden = !day;
+    $('[data-wk]', form).hidden = k !== 'biweekly';
+    if (k === 'biweekly') {
+      [...f.wk.options].forEach((o, i) => {
+        const w = upcoming(draft({ wk: i }), 1)[0];
+        o.textContent = w ? `erstmals ${w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)}–${fmtWd(w.end)}`}` : (i ? 'B' : 'A');
+      });
+    }
+    const next = upcoming(draft(), 3).map((w) => (w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)}–${fmtWd(w.end)}`));
+    $('[data-next]', form).textContent = next.length && k !== 'daily' ? `Nächste Termine: ${next.join(' · ')}` : '';
     $('[data-custom]', form).hidden = k !== 'custom';
     $('[data-season]', form).hidden = !f.hasSeason.checked;
-    $('[data-hint]', form).textContent = k === 'halfyear'
+    $('[data-hint]', form).textContent = k === 'asneeded'
+      ? 'Bei Bedarf: kein fixer Rhythmus, nie „nicht geschafft“. Einfach abhaken, wenn erledigt – zählt trotzdem im Verlauf und Kalender.'
+      : k === 'halfyear'
       ? 'Halbjährlich = Frühjahr (März–Mai) und Herbst (Sept.–Nov.), fällig am gemeinsamen Tag.'
       : k === 'yearly' ? 'Fällig am gemeinsamen Tag.' : '';
   };
@@ -580,6 +866,7 @@ function openEditor(id) {
     sync();
   });
   f.hasSeason.addEventListener('change', sync);
+  for (const el of [f.wd, f.wk, f.n, f.unit, f.from, f.to]) el.addEventListener('change', sync);
   $('[data-close]', form).onclick = closeEditor;
   const del = $('[data-delete]', form);
   if (del) del.onclick = () => {
@@ -594,6 +881,7 @@ function openEditor(id) {
     const k = f.kind.value;
     const iv = k === 'custom' ? { n: Math.max(1, Math.min(999, parseInt(f.n.value, 10) || 1)), unit: f.unit.value } : PRESETS[k];
     if (!title) { $('[data-error]', form).textContent = 'Bitte einen Titel eingeben.'; return; }
+    if (k === 'asneeded' && f.assign.value === 'alternate') f.assign.value = 'shared';
     const task = {
       id: t.id || newId(),
       title,
@@ -601,6 +889,8 @@ function openEditor(id) {
       ...iv,
       assign: f.assign.value,
       season: f.hasSeason.checked ? { from: +f.from.value, to: +f.to.value } : null,
+      wd: (k === 'weekly' || k === 'biweekly') && f.wd.value !== '' ? +f.wd.value : null,
+      wk: k === 'biweekly' ? +f.wk.value : 0,
       created: t.created || S.today,
       order: t.order ?? Math.max(-1, ...S.tasks.map((x) => x.order ?? 0)) + 1,
     };

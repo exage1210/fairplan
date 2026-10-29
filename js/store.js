@@ -76,6 +76,12 @@ async function openFirestore() {
       (s) => cb(s.docs.map((d) => ({ ...d.data(), id: d.id }))),
       fail,
     ),
+    // Erledigungen eines Zeitraums (für den Kalender), day als 'YYYY-MM-DD'
+    watchDays: (code, from, to, cb) => fs.onSnapshot(
+      fs.query(col(code, 'completions'), fs.where('day', '>=', from), fs.where('day', '<=', to)),
+      (s) => cb(s.docs.map((d) => ({ ...d.data(), id: d.id }))),
+      fail,
+    ),
     updateHousehold: (code, patch) => write(fs.updateDoc(hh(code), patch)),
     saveTask: (code, task) => write(fs.setDoc(fs.doc(col(code, 'tasks'), task.id), task)),
     deleteTask: (code, id) => write(fs.deleteDoc(fs.doc(col(code, 'tasks'), id))),
@@ -116,6 +122,10 @@ function openLocal() {
     watchHistory: (code, n, cb) => listen(() => {
       const all = Object.entries(h(code)?.completions || {}).map(([id, c]) => ({ ...clone(c), id }));
       cb(all.sort((a, b) => b.at.localeCompare(a.at)).slice(0, n));
+    }),
+    watchDays: (code, from, to, cb) => listen(() => {
+      const all = Object.entries(h(code)?.completions || {}).map(([id, c]) => ({ ...clone(c), id }));
+      cb(all.filter((c) => c.day >= from && c.day <= to));
     }),
     updateHousehold(code, patch) { Object.assign(h(code).doc, clone(patch)); save(); },
     saveTask(code, task) { h(code).tasks[task.id] = clone(task); save(); },
