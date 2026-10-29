@@ -12,11 +12,12 @@ const t = (title, iv, assign, extra = {}) => ({ title, ...iv, assign, note: '', 
 const season = (from, to) => ({ season: { from, to } });
 
 // Abmachungen: Selbstverständliches, täglich für beide abhakbar (nie „offen“)
+// Beim Vorschlag alle dabei, bei „Leer starten“ und in den Optionen zum Auswählen.
 export const TEMPLATE_RULES = [
+  'Geschirr und Küche (Herd und Flächen)',
   'Einkaufen',
   'Kochen',
-  'Geschirr und Küche (Herd, Flächen) macht, wer nicht kocht',
-  'Abends kurz gemeinsam aufräumen',
+  'Kurz aufräumen',
 ];
 
 export const TEMPLATE = [

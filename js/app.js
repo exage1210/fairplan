@@ -289,6 +289,12 @@ function nowRow(it, sub = '') {
   </div>`;
 }
 
+// Vorgeschlagene Abmachungen als Knöpfe zum An-/Abwählen
+const ruleChips = (picked, attr) => `<div class="filters">${TEMPLATE_RULES.map((r) =>
+  `<button ${attr}="${esc(r)}" aria-pressed="${picked.includes(r)}">${esc(r)}</button>`).join('')}</div>`;
+const ownRules = () => (S.hh.rules || []).filter((r) => !TEMPLATE_RULES.includes(r));
+const toggled = (list, x) => (list.includes(x) ? list.filter((y) => y !== x) : [...list, x]);
+
 // Abmachung als Zeile: graue Checkbox, abgehakt bleibt sie stehen und zeigt, wer's erledigt hat
 function ruleRow(text) {
   const c = S.comps.get(completionId(ruleId(text), ruleKey(), null));
@@ -590,8 +596,9 @@ function viewSettings() {
     <p class="small">Standard ist der Tag der Einrichtung. Davor ist nichts „nicht geschafft“. Auch der 2-Wochen-Rhythmus und der Pakettausch zählen ab hier.</p>
 
     <h2>Unsere Abmachungen</h2>
-    <p class="small">Selbstverständliches für jeden Tag – z. B. „Kochen“ oder „Geschirr macht, wer nicht kocht“. Eine Abmachung pro Zeile. Steht bei „Aktuell“ unter „Heute“: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für beide ab. Wird nie als offen angezeigt, zählt aber in Bilanz und Verlauf.</p>
-    <label class="field"><textarea data-rules rows="5" placeholder="Geschirr macht, wer nicht kocht&#10;Abends kurz aufräumen">${esc((hh.rules || []).join('\n'))}</textarea></label>
+    <p class="small">Selbstverständliches für jeden Tag. Steht bei „Aktuell“ unter „Heute“: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für beide ab. Wird nie als offen angezeigt, zählt aber in Bilanz und Verlauf. Vorschläge antippen zum Auswählen, eigene unten eintragen (eine pro Zeile).</p>
+    ${ruleChips(hh.rules || [], 'data-rule-suggest')}
+    <label class="field">Eigene Abmachungen<textarea data-rules rows="4" placeholder="Pflanzen am Fensterbrett gießen&#10;Post reinholen">${esc(ownRules().join('\n'))}</textarea></label>
 
     <h2>Aufgaben</h2>
     <div class="btnrow"><button class="btn block" data-edit="">Aufgabe hinzufügen</button></div>
@@ -625,7 +632,7 @@ function renderWhoAmI() {
 // ---------- Einrichtung ----------
 
 function startSetup() {
-  S.setup = { step: 'start', persons: [{ name: '', color: 'blau' }, { name: '', color: 'rosa' }], error: '' };
+  S.setup = { step: 'start', persons: [{ name: '', color: 'blau' }, { name: '', color: 'rosa' }], rules: [], error: '' };
   renderSetup();
 }
 
@@ -653,9 +660,14 @@ function renderSetup() {
     body = `<h2>Schritt 2 von 2 · Vorlage</h2>
       <div class="rows">
         <button class="rowbtn" data-setup="create-template"><span>Vorschlag für 2 Personen<br><span class="meta">${TEMPLATE.length} Aufgaben (Paket A und B, halbjährlich und jährlich gemeinsam) und ein paar Abmachungen</span></span></button>
-        <button class="rowbtn" data-setup="create-empty"><span>Leer starten<br><span class="meta">Aufgaben selbst anlegen</span></span></button>
+        <button class="rowbtn" data-setup="rules"><span>Leer starten<br><span class="meta">Aufgaben selbst anlegen, Abmachungen auswählen</span></span></button>
       </div>${err}
       <div class="btnrow"><button class="btn" data-setup="persons">Zurück</button></div>`;
+  } else if (st.step === 'rules') {
+    body = `<h2>Abmachungen auswählen</h2>
+      <p class="small">Selbstverständliches für jeden Tag – für beide abhakbar, nie „offen“. Später in den Optionen änderbar.</p>
+      ${ruleChips(st.rules, 'data-setup-rule')}${err}
+      <div class="btnrow"><button class="btn" data-setup="template">Zurück</button><button class="btn primary" data-setup="create-empty">Haushalt anlegen</button></div>`;
   } else if (st.step === 'busy') {
     body = '<p class="loading">Einen Moment …</p>';
   } else if (st.step === 'created') {
@@ -676,7 +688,7 @@ async function createHousehold(withTemplate) {
     ...DEFAULT_HOUSEHOLD,
     setup: today,
     persons: st.persons.map((p, i) => ({ id: `p${i + 1}`, name: p.name.trim(), color: p.color })),
-    rules: withTemplate ? TEMPLATE_RULES : [],
+    rules: withTemplate ? TEMPLATE_RULES : TEMPLATE_RULES.filter((r) => st.rules.includes(r)),
     createdAt: new Date().toISOString(),
   };
   const tasks = withTemplate ? TEMPLATE.map((t, i) => ({ ...t, id: newId(), created: today, order: i })) : [];
@@ -804,6 +816,12 @@ app.addEventListener('click', (e) => {
     return updateHH({ persons });
   }
   if (d.setupColor) { S.setup.persons[+d.setupColor].color = d.color; return renderSetup(); }
+  if (d.setupRule) { S.setup.rules = toggled(S.setup.rules, d.setupRule); return renderSetup(); }
+  if (d.ruleSuggest) {
+    // vorgeschlagene Abmachungen in Vorschlagsreihenfolge vorne, eigene dahinter
+    const picked = toggled((S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), d.ruleSuggest);
+    return updateHH({ rules: [...TEMPLATE_RULES.filter((r) => picked.includes(r)), ...ownRules()] });
+  }
   if (d.setup) return setupAction(d.setup);
   switch (d.action) {
     case 'copy': return copyCode();
@@ -822,6 +840,7 @@ function setupAction(a) {
   st.error = '';
   if (a === 'new' || a === 'persons') st.step = 'persons';
   else if (a === 'start') st.step = 'start';
+  else if (a === 'rules') st.step = 'rules';
   else if (a === 'template') {
     if (st.persons.some((p) => !p.name.trim())) st.error = 'Bitte beide Namen eingeben.';
     else st.step = 'template';
@@ -861,8 +880,8 @@ app.addEventListener('change', (e) => {
     return updateHH({ away: { ...(S.hh.away || {}), [id]: cur } });
   }
   if (d.rules !== undefined) {
-    const rules = el.value.split('\n').map((r) => r.trim()).filter(Boolean).slice(0, 50);
-    updateHH({ rules });
+    const own = el.value.split('\n').map((r) => r.trim()).filter((r) => r && !TEMPLATE_RULES.includes(r));
+    updateHH({ rules: [...(S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), ...own].slice(0, 50) });
     return snack('Abmachungen gespeichert.');
   }
   if (d.shared) return updateHH({ sharedDay: { ...S.hh.sharedDay, [d.shared]: +el.value } });
