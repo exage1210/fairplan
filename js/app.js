@@ -74,18 +74,17 @@ const S = {
   view: 'heute',
   filter: 'all',
   calMonth: null, // 'YYYY-MM', null = aktueller Monat
-  calDay: null, // ausgewählter Tag, null = heute
+  calDay: null, // Tag im offenen Panel, null = Panel zu
+  panelAnim: false, // Panel beim Öffnen einmal hereinfahren lassen
   today: localToday(),
   hh: undefined, // undefined = lädt, null = nicht gefunden
   tasks: [],
   tasksLoaded: false,
   comps: new Map(),
-  history: [],
   setup: null,
   subs: [],
   compSub: null,
   compSig: '',
-  histSub: null,
   daySub: null, // Erledigungen im Kalenderzeitraum
   daySig: '',
   dayComps: [],
@@ -157,14 +156,6 @@ function refreshCompletions() {
   S.compSub = S.store.watchCompletions(S.code, keys, (m) => { S.comps = m; render(); });
 }
 
-function watchHistory(on) {
-  if (on && !S.histSub) {
-    S.histSub = () => {}; // vorab setzen, falls der Listener sofort rendert
-    S.histSub = S.store.watchHistory(S.code, 150, (h) => { S.history = h; render(); });
-  }
-  if (!on && S.histSub) { S.histSub(); S.histSub = null; }
-}
-
 // Erledigungen für den sichtbaren Kalenderzeitraum laden; null = abmelden
 function watchDays(range) {
   const sig = range ? range.join('|') : '';
@@ -201,11 +192,9 @@ function render() {
   }
   if (!person(S.me)) return renderWhoAmI();
 
-  const views = { heute: viewToday, alle: viewAll, kalender: viewCalendar, verlauf: viewHistory, einstellungen: viewSettings };
-  watchHistory(S.view === 'verlauf');
-  watchDays(S.view === 'kalender' ? calRange() : S.view === 'verlauf' ? [`${S.today.slice(0, 7)}-01`, S.today] : null);
-  // Verlauf ist vorübergehend über die Optionen erreichbar (kommt mit Etappe 2 in den Kalender)
-  const tab = S.view === 'verlauf' ? 'einstellungen' : S.view;
+  const views = { heute: viewToday, alle: viewAll, kalender: viewCalendar, einstellungen: viewSettings };
+  watchDays(S.view === 'kalender' ? calRange() : null);
+  const tab = S.view;
   const tabs = [['heute', 'Aktuell'], ['alle', 'Alle'], ['kalender', 'Kalender'], ['einstellungen', 'Optionen']]
     .map(([v, l]) => `<button data-view="${v}" ${tab === v ? 'aria-current="page"' : ''}>${l}</button>`).join('');
   const scroll = window.scrollY;
@@ -432,104 +421,95 @@ const paused = (w) => (w.owner === null
   : awayDuring(S.hh, w.owner, toDay(w.start), toDay(w.end)));
 const colorOf = (id) => { const p = person(id); return p ? `var(--c-${p.color})` : 'var(--shared)'; };
 
-// Monatsraster ab Montag. Oben je Tag: Punkte = ab diesem Tag ist eine Aufgabe dran (Farbe = zuständig),
-// unten: ✓ und Anzahl, was jede Person an diesem Tag erledigt hat.
-// Darunter für den gewählten Tag: was dran ist (mit Zeitraum) und was wer erledigt hat.
+// Monatsraster ab Montag: pro Tag ein Punkt je Person, die etwas erledigt hat.
+// Optional („Geplantes anzeigen“): Ringe = ab diesem Tag ist etwas dran (Farbe = wer).
+// Oben die Monatsbilanz, darunter der Verlauf des Monats. Tag antippen öffnet ein Panel von unten.
 function viewCalendar() {
-  const f = S.filter;
   const month = S.calMonth || S.today.slice(0, 7);
-  const sel = S.calDay || S.today;
-  const first = toDay(`${month}-01`);
   const [from, to] = calRange();
   const gridStart = toDay(from), gridEnd = toDay(to);
+  const plan = ls.get('plan') === '1';
 
-  const match = (w) => f === 'all' || (f === 'shared' ? w.owner === null : w.owner === f);
-  const wins = S.tasks
-    .flatMap((t) => windowsBetween(t, S.hh, from, fromDay(Math.max(gridEnd, toDay(sel))))).filter(match);
-  const starts = new Map();
-  for (const w of wins) { if (!starts.has(w.start)) starts.set(w.start, []); starts.get(w.start).push(w); }
-
-  const doneMatch = (c) => f === 'all' || (f === 'shared' ? c.forPerson == null : c.by === f);
-  const doneList = S.dayComps.filter(doneMatch);
   const doneOn = new Map();
-  for (const c of doneList) { if (!doneOn.has(c.day)) doneOn.set(c.day, []); doneOn.get(c.day).push(c); }
-  const doneById = new Map([...S.comps, ...S.dayComps.map((c) => [c.id, c])]);
+  for (const c of S.dayComps) { if (!doneOn.has(c.day)) doneOn.set(c.day, []); doneOn.get(c.day).push(c); }
+  const wins = plan || S.calDay ? S.tasks.flatMap((t) => windowsBetween(t, S.hh, from, to)) : [];
+  const starts = new Map();
+  for (const w of wins) {
+    if (kindOf(w.task) === 'daily') continue;
+    if (!starts.has(w.start)) starts.set(w.start, new Set());
+    starts.get(w.start).add(w.owner);
+  }
 
   const cells = [];
   for (let d = gridStart; d <= gridEnd; d++) {
     const ds = fromDay(d);
-    const ws = starts.get(ds) || [];
-    const dots = (ws.some((w) => kindOf(w.task) === 'daily') ? '<i class="daily"></i>' : '')
-      + ws.filter((w) => kindOf(w.task) !== 'daily').map((w) => `<i style="--pc:${colorOf(w.owner)}"></i>`).join('');
-    const counts = new Map();
-    for (const c of doneOn.get(ds) || []) counts.set(c.by, (counts.get(c.by) || 0) + 1);
-    const marks = S.hh.persons.filter((p) => counts.has(p.id))
-      .map((p) => `<b class="by" data-c="${p.color}">✓${counts.get(p.id)}</b>`).join('');
-    const out = ds.slice(0, 7) !== month;
-    const cls = [out ? 'out' : '', ds === S.today ? 'today' : '', ds === sel ? 'sel' : ''].join(' ');
-    cells.push(`<button class="day ${cls}" data-cal-day="${ds}"><span>${asDate(ds).getDate()}</span><span class="dots">${dots}</span><span class="marks">${marks}</span></button>`);
+    const done = doneOn.get(ds) || [];
+    const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id))
+      .map((p) => `<i style="--pc:var(--c-${p.color})"></i>`).join('')
+      + (plan ? [...(starts.get(ds) || [])].map((o) => `<i class="plan" style="--pc:${colorOf(o)}"></i>`).join('') : '');
+    const cls = [ds.slice(0, 7) !== month ? 'out' : '', ds === S.today ? 'today' : '', ds === S.calDay ? 'sel' : ''].join(' ');
+    cells.push(`<button class="day ${cls}" data-cal-day="${ds}"><span>${asDate(ds).getDate()}</span><span class="dots">${dots}</span></button>`);
   }
 
-  const relevant = new Set(relevantKeys(S.tasks, S.hh, S.today));
-  const onDay = wins.filter((w) => w.start <= sel && sel <= w.end);
-  const rows = KINDS.map((k) => {
-    const g = onDay.filter((w) => kindOf(w.task) === k);
-    if (!g.length) return '';
-    const list = g.map((w) => {
-      const done = doneById.get(completionId(w.task.id, w.key, w.slot));
-      const pause = !done && paused(w);
-      const missed = !done && !pause && kindOf(w.task) !== 'daily' && w.end < S.today && relevant.has(w.key);
-      const state = done ? ` · ✓ ${byName(done.by)}, ${fmtWd(done.day)}` : pause ? ' · pausiert (abwesend)' : missed ? ' · <span class="ov">nicht geschafft</span>' : '';
-      return `<div class="item ${missed ? 'overdue' : done ? 'done' : ''}" style="--pc:${colorOf(w.owner)}">
-        <div class="body cal"><div class="title">${esc(w.task.title)}</div>
-          <div class="meta">${w.owner === null ? 'Gemeinsam' : pn(w.owner)} · ${w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)} bis ${fmtWd(w.end)}`}${state}</div></div>
-      </div>`;
-    }).join('');
-    return `<section class="group"><h2>${KIND_LABEL[k]}<span class="count">${g.length}</span></h2><div class="list">${list}</div></section>`;
-  }).join('');
+  // Monatsbilanz: eine Zeile, darunter zwei dünne Balken in den Personenfarben
+  const monthComps = S.dayComps.filter((c) => c.day.startsWith(month));
+  const counts = S.hh.persons.map((p) => [p, monthComps.filter((c) => c.by === p.id).length]);
+  const bars = monthComps.length
+    ? counts.filter(([, n]) => n).map(([p, n]) => `<i style="flex:${n};--pc:var(--c-${p.color})"></i>`).join('')
+    : '<i class="empty"></i>';
+  const monthName = asDate(`${month}-01`).toLocaleDateString('de-AT', { month: 'long' });
 
-  const doneSel = (doneOn.get(sel) || []).slice().sort((a, b) => a.at.localeCompare(b.at));
-  const doneRows = doneSel.map((c) => {
-    const time = new Date(c.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
-    const proxy = c.forPerson && c.forPerson !== c.by ? ` für ${esc(person(c.forPerson)?.name ?? '?')}` : '';
-    return `<div class="hist"><span class="time">${time}</span><div><div>${esc(c.title)}</div>
-      <div class="meta">${byName(c.by)}${proxy}</div></div></div>`;
+  // Verlauf des Monats, neueste zuerst
+  let last = '';
+  const hist = monthComps.slice().sort((a, b) => b.at.localeCompare(a.at)).map((c) => {
+    const head = c.day !== last ? `<h2>${asDate(c.day).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' })}</h2>` : '';
+    last = c.day;
+    return head + histRow(c);
   }).join('');
 
   const title = asDate(`${month}-01`).toLocaleDateString('de-AT', { month: 'long', year: 'numeric' });
-  const selTitle = asDate(sel).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
-  return `<div class="filters">${filterBar()}</div>
-    <div class="calhead">
+  return `<div class="calhead">
       <button class="navbtn" data-cal-month="-1" aria-label="Voriger Monat">‹</button>
       <strong>${title}</strong>
       <button class="navbtn" data-cal-month="1" aria-label="Nächster Monat">›</button>
     </div>
+    <div class="bal"><div class="small">Im ${esc(monthName)} erledigt: ${counts.map(([p, n]) => `${byName(p.id)} ${n}`).join(' · ')}</div>
+      <div class="bal-bar">${bars}</div></div>
     <div class="cal-grid">${WEEKDAYS.map((w) => `<span class="wd">${w}</span>`).join('')}${cells.join('')}</div>
-    <p class="small">Punkt = ab diesem Tag dran (Farbe = wer, grauer Ring = Tägliches). ✓ = so viel hat die Person an dem Tag erledigt.</p>
-    <p class="banner">Im ${esc(asDate(`${month}-01`).toLocaleDateString('de-AT', { month: 'long' }))} erledigt: ${balance(S.dayComps.filter((c) => c.day.startsWith(month)))}</p>
-    <h2 class="calday">${esc(selTitle)}</h2>
-    <section class="group"><h2>Erledigt<span class="count">${doneSel.length}</span></h2>
-      ${doneRows || '<p class="muted">An diesem Tag nichts erledigt.</p>'}</section>
-    ${rows ? `<h2 class="calday">Dran</h2>${rows}` : '<p class="muted">Nichts dran.</p>'}`;
+    <label class="cb"><input type="checkbox" data-action="plan" ${plan ? 'checked' : ''}> Geplantes anzeigen</label>
+    <h2 class="hist-title">Verlauf</h2>
+    ${hist || '<p class="muted">In diesem Monat noch nichts erledigt.</p>'}
+    ${S.calDay ? dayPanel(S.calDay, wins, doneOn) : ''}`;
 }
 
-function viewHistory() {
-  const monthName = asDate(S.today).toLocaleDateString('de-AT', { month: 'long' });
-  const head = `<div class="btnrow"><button class="btn" data-view="einstellungen">‹ Zurück zu den Optionen</button></div>
-    <p class="banner">Im ${monthName} erledigt: ${balance(S.dayComps)}</p>`;
-  if (!S.history.length) return `${head}<h2>Verlauf</h2><p class="muted">Noch nichts erledigt.</p>`;
-  let last = '';
-  return head + S.history.map((c) => {
-    const d = c.day;
-    const head = d !== last ? `<h2>${asDate(d).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</h2>` : '';
-    last = d;
-    const time = new Date(c.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
-    const proxy = c.forPerson && c.forPerson !== c.by;
-    return `${head}<div class="hist"><span class="time">${time}</span><div>
-      <div>${esc(c.title)}</div>
-      <div class="meta">erledigt von ${byName(c.by)}${proxy ? ` für ${esc(person(c.forPerson)?.name ?? '?')} (Vertretung)` : ''}</div>
-    </div></div>`;
-  }).join('');
+function histRow(c) {
+  const time = new Date(c.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
+  const proxy = c.forPerson && c.forPerson !== c.by ? ` für ${esc(person(c.forPerson)?.name ?? '?')}` : '';
+  return `<div class="hist"><span class="time">${time}</span><div><div>${esc(c.title)}</div>
+    <div class="meta">${byName(c.by)}${proxy}</div></div></div>`;
+}
+
+// Panel von unten für einen Tag: was erledigt wurde (wer, wann, für wen) und was offen blieb bzw. dran ist
+function dayPanel(sel, wins, doneOn) {
+  const doneById = new Map([...S.comps, ...S.dayComps.map((c) => [c.id, c])]);
+  const isDone = (w) => doneById.has(completionId(w.task.id, w.key, w.slot));
+  const done = (doneOn.get(sel) || []).slice().sort((a, b) => a.at.localeCompare(b.at));
+  const past = sel < S.today;
+  // Vergangen: was an diesem Tag fällig war und nicht erledigt wurde. Heute/später: was an diesem Tag dran ist.
+  const open = wins.filter((w) => kindOf(w.task) !== 'daily' && !isDone(w) && !paused(w)
+    // nur Zeitfenster, die im geladenen Zeitraum beginnen – sonst fehlt evtl. die Erledigung
+    && (past ? w.end === sel && w.start >= calRange()[0] : w.start <= sel && sel <= w.end))
+    .sort((a, b) => a.end.localeCompare(b.end) || kindRank(a.task) - kindRank(b.task));
+  const openRows = open.map((w) => `<div class="hist"><i class="sw" style="--pc:${colorOf(w.owner)}"></i><div><div>${esc(w.task.title)}</div>
+    <div class="meta">${w.owner === null ? 'Gemeinsam' : esc(person(w.owner)?.name ?? '')}${past ? '' : ` · bis ${dayLabel(w.end)}`}</div></div></div>`).join('');
+  const title = asDate(sel).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
+  return `<div class="panel-bg${S.panelAnim ? ' anim' : ''}" data-cal-close></div>
+    <div class="panel${S.panelAnim ? ' anim' : ''}" role="dialog" aria-label="${esc(title)}">
+      <div class="panel-head"><strong>${esc(title)}</strong><button class="navbtn" data-cal-close aria-label="Schließen">×</button></div>
+      <h2>Erledigt<span class="count">${done.length}</span></h2>
+      ${done.map(histRow).join('') || '<p class="muted">Nichts erledigt.</p>'}
+      ${open.length ? `<h2>${past ? 'Offen geblieben' : 'Dran'}<span class="count">${open.length}</span></h2>${openRows}` : ''}
+    </div>`;
 }
 
 function viewSettings() {
@@ -553,9 +533,6 @@ function viewSettings() {
     : '<p class="muted">Noch keine Aufgaben.</p>';
 
   return `
-    <h2>Verlauf</h2>
-    <div class="btnrow"><button class="btn block" data-view="verlauf">Verlauf anzeigen</button></div>
-
     <h2>Zahl am App-Icon</h2>
     <p class="small">Zeigt, was bei dir nicht geschafft oder jetzt dran ist (ohne Tägliches).</p>
     ${badgeSetting()}
@@ -764,7 +741,7 @@ async function copyCode() {
 function updateHH(patch) { S.store.updateHousehold(S.code, patch); }
 
 app.addEventListener('click', (e) => {
-  const el = e.target.closest('button, [data-action]');
+  const el = e.target.closest('button, [data-action], [data-cal-close]');
   if (!el || el.disabled) return;
   const d = el.dataset;
   if (d.view) {
@@ -773,12 +750,13 @@ app.addEventListener('click', (e) => {
   }
   if (d.filter) { S.filter = d.filter; return render(); }
   if (d.awayClear) return updateHH({ away: { ...(S.hh.away || {}), [d.awayClear]: {} } });
-  if (d.calDay) { S.calDay = d.calDay; S.calMonth = d.calDay.slice(0, 7); return render(); }
+  if (d.calDay) { S.calDay = d.calDay; S.panelAnim = true; render(); S.panelAnim = false; return; }
+  if (el.matches('[data-cal-close]')) { S.calDay = null; return render(); }
   if (d.calMonth) {
     const [y, m] = (S.calMonth || S.today.slice(0, 7)).split('-').map(Number);
     const t = new Date(y, m - 1 + +d.calMonth, 1);
     S.calMonth = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`;
-    S.calDay = S.calMonth === S.today.slice(0, 7) ? null : `${S.calMonth}-01`;
+    S.calDay = null;
     return render();
   }
   if (d.me) { S.me = d.me; ls.set('me', d.me); return render(); }
@@ -821,6 +799,7 @@ app.addEventListener('change', (e) => {
   const el = e.target;
   const d = el.dataset;
   if (d.action === 'toggle') return toggle(el);
+  if (d.action === 'plan') { ls.set('plan', el.checked ? '1' : null); return render(); }
   if (d.personName !== undefined) {
     const name = el.value.trim();
     if (!name) return render();
@@ -1009,4 +988,8 @@ function closeEditor() {
   sheet.innerHTML = '';
   document.body.style.overflow = '';
 }
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !sheet.hidden) closeEditor(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!sheet.hidden) closeEditor();
+  else if (S.calDay) { S.calDay = null; render(); }
+});
