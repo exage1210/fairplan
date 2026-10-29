@@ -1,7 +1,7 @@
 import {
   KINDS, PRESETS, GROUPS, kindOf, evaluate, relevantKeys, completionId, nextSwap,
   packageOwners, localToday, toDay, fromDay, groupOf, windowsBetween, awayDuring,
-  monthlyMinutes, loadByPerson, autoSplit,
+  monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { TEMPLATE, TEMPLATE_RULES } from './template.js';
@@ -28,7 +28,7 @@ const MONTHS = Array.from({ length: 12 }, (_, i) => new Date(2000, i, 1).toLocal
 const DEFAULT_HOUSEHOLD = {
   swapped: false,
   rotation: { short: 2, quarter: 6, half: 12, year: 12 },
-  sharedDay: { halfyearMonth: 4, halfyearDay: 15, yearlyMonth: 4, yearlyDay: 15 },
+  sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
 const LOGO = '<h1 class="logo">fairplan</h1>';
@@ -48,7 +48,7 @@ function fmtDate(s, withYear) {
 const fmtLong = (s) => asDate(s).toLocaleDateString('de-AT', { day: 'numeric', month: 'long', year: 'numeric' });
 const intervalLabel = (t) => {
   const k = kindOf(t);
-  const day = (k === 'weekly' || k === 'biweekly') && Number.isInteger(t.wd) ? ` am ${WEEKDAYS[t.wd]}` : '';
+  const day = Number.isInteger(t.day) ? ` · fest am ${WEEKDAYS[t.day]}` : '';
   return (k === 'custom' ? `Alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : KIND_LABEL[k]) + day;
 };
 const seasonLabel = (s) => `${MONTHS[s.from - 1]}–${MONTHS[s.to - 1]}`;
@@ -57,12 +57,12 @@ const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WEEKDAYS_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const weekdayOf = (s) => (asDate(s).getDay() + 6) % 7; // Mo=0
 const fmtWd = (s) => `${WEEKDAYS[weekdayOf(s)]} ${fmtDate(s)}`;
-// Kurz relativ zu heute: Wochentag innerhalb von 6 Tagen, sonst „Mo 2.11.“
+// Kurz relativ zu heute: Wochentag in dieser Woche bzw. in den letzten 6 Tagen, sonst „Mo 2.11.“
 function dayLabel(s) {
   const diff = toDay(s) - toDay(S.today);
   if (diff === 0) return 'heute';
   if (diff === -1) return 'gestern';
-  return Math.abs(diff) <= 6 ? WEEKDAYS[weekdayOf(s)] : fmtWd(s);
+  return diff >= -6 && s <= weekEnd() ? WEEKDAYS[weekdayOf(s)] : fmtWd(s);
 }
 const weekEnd = () => fromDay(toDay(S.today) + 6 - weekdayOf(S.today)); // Sonntag dieser Woche
 
@@ -280,7 +280,8 @@ const lateText = (it) => `<span class="${it.owner === S.me || it.owner === null 
 // Termin-Zusatz für „Aktuell“: „seit … offen“, „bis Sa“, „ab Mo 2.11.“ – bei „Heute“ nichts
 function whenText(it) {
   if (it.status === 'overdue') return lateText(it);
-  if (it.status === 'upcoming') return `ab ${dayLabel(it.due)}`;
+  if (it.status === 'upcoming') return `${dayLabel(it.due)}, bis ${dayLabel(it.end)}`;
+  if (it.status === 'idle' && it.next) return `ab ${dayLabel(it.next)}`;
   if (it.status === 'due' && it.end > S.today) return `bis ${dayLabel(it.end)}`;
   return '';
 }
@@ -292,10 +293,11 @@ function nowRow(it, sub = '') {
   const t = it.task, k = kindOf(t);
   const iv = k === 'custom' ? `alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : SHORT_KIND[k];
   const done = it.status === 'done';
+  const off = !it.key; // nächster Termin liegt in einer späteren Periode → noch nicht abhakbar
   const extra = [t.note ? esc(t.note) : '', sub].filter(Boolean).join(' · ');
-  return `<div class="item ${done ? 'done' : ''}" ${done ? '' : 'data-swipe'} style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
+  return `<div class="item ${done ? 'done' : ''}" ${done || off ? '' : 'data-swipe'} style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
     <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}"
-      ${done ? 'checked' : ''} aria-label="${esc(t.title)} erledigt"><span class="box"></span></label>
+      ${done ? 'checked' : ''} ${off ? 'disabled' : ''} aria-label="${esc(t.title)} erledigt"><span class="box"></span></label>
     <div class="body"><div class="head"><span class="title">${esc(t.title)}</span><span class="kind">${iv}</span></div>
       ${extra ? `<div class="meta">${extra}</div>` : ''}${stepsBlock(it)}</div>
   </div>`;
@@ -338,13 +340,11 @@ function section(title, items, { lead, cls = '' } = {}) {
 
 const listOf = (items, opts) => (items.length ? `<div class="list">${items.map((i) => itemRow(i, opts)).join('')}</div>` : '');
 
-// Jetzt dran: Tägliches, was heute beginnt oder in den nächsten 2 Tagen endet
-const isNow = (i) => kindOf(i.task) === 'daily' || i.due === S.today || i.end <= fromDay(toDay(S.today) + 2);
 
 // Zahl am App-Icon: nicht Geschafftes + jetzt dran (eigenes und gemeinsames), ohne Tägliches
 function badgeCount() {
   return allItems().filter((i) => (i.owner === S.me || i.owner === null) && kindOf(i.task) !== 'daily'
-    && (i.status === 'overdue' || (i.status === 'due' && isNow(i)))).length;
+    && (i.status === 'overdue' || i.status === 'due')).length;
 }
 let lastBadge = -1;
 function updateBadge() {
@@ -374,14 +374,17 @@ function viewToday() {
     || kindRank(a.task) - kindRank(b.task) || (a.task.order ?? 0) - (b.task.order ?? 0);
   const sun = weekEnd();
 
-  // Gruppiert nach Frist: Noch offen · Heute · Diese Woche (bis So) · Später
+  // Gruppiert nach Termin: Noch offen (vergessen) · Heute (jetzt dran) · Diese Woche (Termin bis So) · Später
   const late = open.filter((i) => mine(i) && i.status === 'overdue').sort(byDate('end'));
-  const today = open.filter((i) => mine(i) && i.status === 'due' && i.end <= S.today).sort(byDate('end'));
-  const week = open.filter((i) => mine(i) && i.status === 'due' && i.end > S.today && i.end <= sun).sort(byDate('end'));
+  const today = open.filter((i) => mine(i) && i.status === 'due').sort(byDate('end'));
+  const week = open.filter((i) => mine(i) && i.status === 'upcoming' && i.due <= sun).sort(byDate('due'));
+  // Später: was nach Sonntag noch in dieser Periode kommt, dazu die nächsten Termine der kommenden 2 Wochen
+  const soon = fromDay(toDay(S.today) + 14);
   const later = [
-    ...open.filter((i) => mine(i) && i.status === 'due' && i.end > sun).sort(byDate('end')),
-    ...open.filter((i) => mine(i) && i.status === 'upcoming').sort(byDate('due')),
-  ];
+    ...open.filter((i) => mine(i) && i.status === 'upcoming' && i.due > sun),
+    ...items.filter((i) => mine(i) && i.status === 'idle' && i.next && i.next <= soon && kindOf(i.task) !== 'daily')
+      .map((i) => ({ ...i, due: i.next })),
+  ].sort(byDate('due'));
   const need = sortItems(items.filter((i) => mine(i) && (i.status === 'need' || (i.status === 'done' && kindOf(i.task) === 'asneeded'))));
   const doneToday = items.filter((i) => i.status === 'done' && i.completion?.day === S.today && kindOf(i.task) !== 'asneeded');
 
@@ -419,10 +422,10 @@ function viewToday() {
 
   const rules = (S.hh.rules || []).filter(Boolean);
   return `<div class="banner now">${banner}</div>
-    ${group('Noch offen', late)}
-    ${group('Heute', today)}
     ${rules.length ? `<section class="group"><h2>Abmachungen<span class="count">${rules.filter((r) => S.comps.has(completionId(ruleId(r), ruleKey(), null))).length}/${rules.length}</span></h2>
       <div class="list">${rules.map(ruleRow).join('')}</div></section>` : ''}
+    ${group('Noch offen', late)}
+    ${group('Heute', today)}
     ${group('Diese Woche', week)}
     ${later.length ? fold('later', `Später <span class="count">${later.length}</span>`, rows(later)) : ''}
     ${need.length ? fold('need', `Bei Bedarf <span class="count">${need.length}</span>`, rows(need, () => '')) : ''}
@@ -489,6 +492,7 @@ function viewCalendar() {
     starts.get(w.start).add(w.owner);
   }
 
+  const hol = new Map([...holidays(+from.slice(0, 4)), ...holidays(+to.slice(0, 4))]);
   const cells = [];
   for (let d = gridStart; d <= gridEnd; d++) {
     const ds = fromDay(d);
@@ -496,8 +500,8 @@ function viewCalendar() {
     const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id))
       .map((p) => `<i style="--pc:var(--c-${p.color})"></i>`).join('')
       + (plan && ds >= S.today && ds >= S.hh.setup ? [...(starts.get(ds) || [])].map((o) => `<i class="plan" style="--pc:${colorOf(o)}"></i>`).join('') : '');
-    const cls = [ds.slice(0, 7) !== month ? 'out' : '', ds === S.today ? 'today' : '', ds === S.calDay ? 'sel' : ''].join(' ');
-    cells.push(`<button class="day ${cls}" data-cal-day="${ds}"><span>${asDate(ds).getDate()}</span><span class="dots">${dots}</span></button>`);
+    const cls = [ds.slice(0, 7) !== month ? 'out' : '', ds === S.today ? 'today' : '', ds === S.calDay ? 'sel' : '', hol.has(ds) ? 'holiday' : ''].join(' ');
+    cells.push(`<button class="day ${cls}" data-cal-day="${ds}" ${hol.has(ds) ? `title="${esc(hol.get(ds))}"` : ''}><span>${asDate(ds).getDate()}</span><span class="dots">${dots}</span></button>`);
   }
 
   // Monatsbilanz: eine Zeile, darunter zwei dünne Balken in den Personenfarben
@@ -528,7 +532,8 @@ function viewCalendar() {
     <label class="cb"><input type="checkbox" data-action="plan" ${plan ? 'checked' : ''}> Geplantes anzeigen</label>
     <h2 class="hist-title">Verlauf</h2>
     ${hist || '<p class="muted">In diesem Monat noch nichts erledigt.</p>'}
-    ${S.calDay ? dayPanel(S.calDay, wins, doneOn) : ''}`;
+    <p class="small">Feiertage sind im Kalender umrandet.</p>
+    ${S.calDay ? dayPanel(S.calDay, wins, doneOn, hol.get(S.calDay)) : ''}`;
 }
 
 function histRow(c) {
@@ -539,7 +544,7 @@ function histRow(c) {
 }
 
 // Panel von unten für einen Tag: was erledigt wurde (wer, wann, für wen) und was offen blieb bzw. dran ist
-function dayPanel(sel, wins, doneOn) {
+function dayPanel(sel, wins, doneOn, holiday) {
   const doneById = new Map([...S.comps, ...S.dayComps.map((c) => [c.id, c])]);
   const isDone = (w) => doneById.has(completionId(w.task.id, w.key, w.slot));
   const done = (doneOn.get(sel) || []).slice().sort((a, b) => a.at.localeCompare(b.at));
@@ -555,6 +560,7 @@ function dayPanel(sel, wins, doneOn) {
   return `<div class="panel-bg${S.panelAnim ? ' anim' : ''}" data-cal-close></div>
     <div class="panel${S.panelAnim ? ' anim' : ''}" role="dialog" aria-label="${esc(title)}">
       <div class="panel-head"><strong>${esc(title)}</strong><button class="navbtn" data-cal-close aria-label="Schließen">×</button></div>
+      ${holiday ? `<p class="small">Feiertag: ${esc(holiday)}</p>` : ''}
       <h2>Erledigt<span class="count">${done.length}</span></h2>
       ${done.map(histRow).join('') || '<p class="muted">Nichts erledigt.</p>'}
       ${open.length ? `<h2>${past ? 'Offen geblieben' : 'Dran'}<span class="count">${open.length}</span></h2>${openRows}` : ''}
@@ -564,7 +570,6 @@ function dayPanel(sel, wins, doneOn) {
 function viewSettings() {
   const hh = S.hh;
   const opt = (v, l, cur) => `<option value="${v}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(l)}</option>`;
-  const days = (cur) => Array.from({ length: 31 }, (_, i) => opt(i + 1, `${i + 1}.`, cur)).join('');
   const [a, b] = packageOwners('short', hh, toDay(S.today));
   const load = loadByPerson(S.tasks, hh, toDay(S.today));
 
@@ -605,6 +610,11 @@ function viewSettings() {
     <h2>Personen</h2>
     ${persons}
 
+    <h2>Putztage</h2>
+    <p class="small">An diesen Tagen sind die Aufgaben der jeweiligen Person dran – auch nach dem Pakettausch. Gemeinsames am gemeinsamen Putztag.</p>
+    ${hh.persons.map((p, i) => `<div class="setting"><p>${pn(p.id)}${p.id === S.me ? ' (du)' : ''}</p>${dayChips(p.days?.length ? p.days : [5], `data-person-day="${i}"`)}</div>`).join('')}
+    <div class="setting"><p>Gemeinsam</p>${dayChips(hh.sharedDays?.length ? hh.sharedDays : [5], 'data-shared-day')}</div>
+
     <h2>Abwesend (Urlaub, krank)</h2>
     <p class="small">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „nicht geschafft“. Gemeinsames pausiert nur, wenn beide weg sind.</p>
     ${hh.persons.map((p) => {
@@ -617,7 +627,7 @@ function viewSettings() {
 
     <h2>Start des Plans</h2>
     <label class="field">Ab diesem Tag zählen die Aufgaben<input type="date" data-start value="${esc(hh.setup)}"></label>
-    <p class="small">Standard ist der Tag der Einrichtung. Davor ist nichts „nicht geschafft“. Auch der 2-Wochen-Rhythmus und der Pakettausch zählen ab hier.</p>
+    <p class="small">Termine davor zählen nicht. Auch der 2-Wochen-Rhythmus und der Pakettausch zählen ab hier.</p>
 
     <h2>Unsere Abmachungen</h2>
     <p class="small">Selbstverständliches für jeden Tag. Steht bei „Aktuell“ unter „Heute“: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für beide ab. Wird nie als offen angezeigt, zählt aber in Bilanz und Verlauf. Vorschläge antippen zum Auswählen, eigene unten eintragen (eine pro Zeile).</p>
@@ -638,13 +648,6 @@ function viewSettings() {
     <p>Paket A: ${pn(a)} · Paket B: ${pn(b)}</p>
     <div class="btnrow"><button class="btn" data-action="flip">Zuteilung umdrehen</button></div>
     ${hh.rotationOff ? '' : `<p class="small">Gezählt ab dem Start des Plans (${fmtLong(hh.setup)}).</p>${rotation}`}
-
-    <h2>Gemeinsamer Tag</h2>
-    <p class="small">Halbjährliche und jährliche Aufgaben sind an diesem Tag ihrer Periode fällig.</p>
-    <div class="inline"><label class="field">Halbjährlich, Tag<select data-shared="halfyearDay">${days(hh.sharedDay.halfyearDay)}</select></label>
-      <label class="field">Monat<select data-shared="halfyearMonth">${[3, 4, 5].map((m) => opt(m, `${MONTHS[m - 1]} / ${MONTHS[m + 5]}`, hh.sharedDay.halfyearMonth)).join('')}</select></label></div>
-    <div class="inline"><label class="field">Jährlich, Tag<select data-shared="yearlyDay">${days(hh.sharedDay.yearlyDay)}</select></label>
-      <label class="field">Monat<select data-shared="yearlyMonth">${MONTHS.map((m, i) => opt(i + 1, m, hh.sharedDay.yearlyMonth)).join('')}</select></label></div>
 
     ${canHaptic ? `<h2>Vibrieren</h2>
     ${switchRow('vibrate', ls.get('vibrate') !== '0', 'Beim Abhaken kurz vibrieren', 'Gilt nur für dieses Gerät.')}` : ''}
@@ -671,14 +674,21 @@ function renderWhoAmI() {
 // reset: „Plan neu einrichten“ im bestehenden Haushalt (Code, Verbindung und Verlauf bleiben)
 function startSetup(reset = false) {
   S.setup = reset
-    ? { step: 'persons', reset: true, persons: S.hh.persons.map((p) => ({ name: p.name, color: p.color })),
+    ? { step: 'persons', reset: true, persons: S.hh.persons.map((p) => ({ name: p.name, color: p.color, days: p.days?.length ? p.days : [5] })),
+      shared: S.hh.sharedDays?.length ? S.hh.sharedDays : [5], start: S.today,
       rules: (S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), tasks: [], error: '' }
-    : { step: 'start', persons: [{ name: '', color: 'blau' }, { name: '', color: 'rosa' }], rules: [], tasks: [], error: '' };
+    : { step: 'start', persons: [{ name: '', color: 'violett', days: [5] }, { name: '', color: 'gruen', days: [5] }],
+      shared: [5], start: S.today, rules: [], tasks: [], error: '' };
   renderSetup();
 }
 
 const hours = (min) => (min / 60).toLocaleString('de-AT', { maximumFractionDigits: 1 });
-const setupCtx = () => ({ ...DEFAULT_HOUSEHOLD, setup: S.today, persons: [{ id: 'p1' }, { id: 'p2' }] });
+const setupCtx = () => ({ ...DEFAULT_HOUSEHOLD, setup: S.setup.start, persons: [{ id: 'p1' }, { id: 'p2' }] });
+
+// Wochentage zum An-/Abwählen (Putztage)
+const dayChips = (picked, attr) => `<div class="filters days">${WEEKDAYS.map((w, i) =>
+  `<button ${attr} data-wd="${i}" aria-pressed="${picked.includes(i)}">${w}</button>`).join('')}</div>`;
+const toggledDay = (list, d) => { const n = toggled(list, d); return n.length ? n.sort((a, b) => a - b) : list; };
 
 function renderSetup() {
   const st = S.setup;
@@ -688,7 +698,7 @@ function renderSetup() {
   let body = '';
   if (st.step === 'start') {
     body = `<h2>Willkommen</h2>
-      <p>Ein Putzplan für zwei. Lege einen Haushalt an oder tritt mit einem Code bei.</p>
+      <p>Ein Putzplan für deinen Haushalt. Lege einen Haushalt an oder tritt mit einem Code bei.</p>
       <div class="btnrow"><button class="btn primary block" data-setup="new">Haushalt neu anlegen</button></div>
       <h2>Beitreten</h2>
       <label class="field">Haushalts-Code<input type="text" id="joinCode" class="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX"></label>
@@ -698,15 +708,20 @@ function renderSetup() {
       ${st.persons.map((p, i) => `<div class="setting">
         <label class="field">Name Person ${i + 1}<input type="text" data-setup-name="${i}" value="${esc(p.name)}" maxlength="30"></label>
         <div class="colors">${COLORS.map(([c, l]) => `<button data-setup-color="${i}" data-color="${c}" aria-pressed="${p.color === c}"><i class="sw" style="--pc:var(--c-${c})"></i>${l}</button>`).join('')}</div>
+        <p class="small">Putztage</p>${dayChips(p.days, `data-setup-day="${i}"`)}
       </div>`).join('')}
+      <div class="setting"><p class="small">Gemeinsamer Putztag (für Gemeinsames)</p>${dayChips(st.shared, 'data-setup-shared')}</div>
+      <p class="small">An den Putztagen sind die Aufgaben der jeweiligen Person dran. Später in den Optionen änderbar.</p>
       ${err}
       <div class="btnrow"><button class="btn" data-setup="${st.reset ? 'cancel' : 'start'}">${st.reset ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
   } else if (st.step === 'template') {
     body = `<h2>Schritt 2 von 3 · Vorlage</h2>
-      <div class="rows">
-        <button class="rowbtn" data-setup="split"><span>Vorschlag für 2 Personen<br><span class="meta">${TEMPLATE.length} Aufgaben mit geschätzter Dauer, fair aufgeteilt, und ${TEMPLATE_RULES.length} Abmachungen</span></span></button>
-        <button class="rowbtn" data-setup="rules"><span>Leer starten<br><span class="meta">Aufgaben selbst anlegen, Abmachungen auswählen</span></span></button>
-      </div>${err}
+      <label class="field">Start des Plans<input type="date" data-setup-start value="${esc(st.start)}"></label>
+      <p class="small">Ab diesem Tag zählen die Aufgaben, auch der Pakettausch.</p>
+      <button class="choice" data-setup="split"><strong>Vorschlag 2-Personen-Haushalt</strong>
+        <span>${TEMPLATE.length} Aufgaben mit geschätzter Dauer, fair aufgeteilt und auf eure Putztage verteilt, dazu ${TEMPLATE_RULES.length} Abmachungen</span></button>
+      <button class="choice" data-setup="rules"><strong>Leer starten</strong>
+        <span>Aufgaben selbst anlegen, Abmachungen auswählen</span></button>${err}
       ${st.reset ? '<p class="small">Die bisherigen Aufgaben werden ersetzt. Code, Verbindung und Verlauf bleiben.</p>' : ''}
       <div class="btnrow"><button class="btn" data-setup="persons">Zurück</button></div>`;
   } else if (st.step === 'split') {
@@ -745,9 +760,11 @@ function renderSetup() {
   fillQr();
 }
 
+// Termine erst beim Anlegen verteilen (nach dem Umverteilen auf A/B)
 function setupTasks(withTemplate) {
-  return withTemplate ? S.setup.tasks.map((t, i) => ({ ...t, id: newId(), created: S.today, order: i })) : [];
+  return withTemplate ? spreadPositions(S.setup.tasks).map((t, i) => ({ ...t, id: newId(), created: S.setup.start, order: i })) : [];
 }
+const setupPersons = () => S.setup.persons.map((p, i) => ({ id: `p${i + 1}`, name: p.name.trim(), color: p.color, days: p.days }));
 const setupRules = (withTemplate) => (withTemplate ? TEMPLATE_RULES : TEMPLATE_RULES.filter((r) => S.setup.rules.includes(r)));
 
 async function createHousehold(withTemplate) {
@@ -755,8 +772,9 @@ async function createHousehold(withTemplate) {
   const code = newCode();
   const doc = {
     ...DEFAULT_HOUSEHOLD,
-    setup: S.today,
-    persons: st.persons.map((p, i) => ({ id: `p${i + 1}`, name: p.name.trim(), color: p.color })),
+    setup: st.start,
+    sharedDays: st.shared,
+    persons: setupPersons(),
     rules: setupRules(withTemplate),
     createdAt: new Date().toISOString(),
   };
@@ -775,13 +793,13 @@ async function createHousehold(withTemplate) {
   renderSetup();
 }
 
-// Plan neu einrichten: Aufgaben ersetzen, Start auf heute; Code, Personen-IDs, eigene Abmachungen und Verlauf bleiben
+// Plan neu einrichten: Aufgaben ersetzen, neuer Start; Code, Personen-IDs, eigene Abmachungen und Verlauf bleiben
 function resetPlan(withTemplate) {
   const st = S.setup;
-  const persons = S.hh.persons.map((p, i) => ({ ...p, name: st.persons[i].name.trim(), color: st.persons[i].color }));
+  const persons = S.hh.persons.map((p, i) => ({ ...p, ...setupPersons()[i], id: p.id }));
   for (const t of S.tasks) S.store.deleteTask(S.code, t.id);
   for (const t of setupTasks(withTemplate)) S.store.saveTask(S.code, t);
-  updateHH({ persons, rules: [...setupRules(withTemplate), ...ownRules()], setup: S.today, swapped: false });
+  updateHH({ persons, sharedDays: st.shared, rules: [...setupRules(withTemplate), ...ownRules()], setup: st.start, swapped: false });
   S.setup = null;
   S.view = 'heute';
   window.scrollTo(0, 0);
@@ -1028,6 +1046,13 @@ app.addEventListener('click', (e) => {
   }
   if (d.setupColor) { S.setup.persons[+d.setupColor].color = d.color; return renderSetup(); }
   if (d.setupRule) { S.setup.rules = toggled(S.setup.rules, d.setupRule); return renderSetup(); }
+  if (d.setupDay) { const p = S.setup.persons[+d.setupDay]; p.days = toggledDay(p.days, +d.wd); return renderSetup(); }
+  if (el.matches('[data-setup-shared]')) { S.setup.shared = toggledDay(S.setup.shared, +d.wd); return renderSetup(); }
+  if (d.personDay) {
+    const persons = S.hh.persons.map((p, i) => (i === +d.personDay ? { ...p, days: toggledDay(p.days?.length ? p.days : [5], +d.wd) } : p));
+    return updateHH({ persons });
+  }
+  if (el.matches('[data-shared-day]')) return updateHH({ sharedDays: toggledDay(S.hh.sharedDays?.length ? S.hh.sharedDays : [5], +d.wd) });
   if (d.split) {
     const t = S.setup.tasks[+d.split];
     t.assign = t.assign === 'A' ? 'B' : 'A';
@@ -1119,7 +1144,6 @@ app.addEventListener('change', (e) => {
     updateHH({ rules: [...(S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), ...own].slice(0, 50) });
     return snack('Abmachungen gespeichert.');
   }
-  if (d.shared) return updateHH({ sharedDay: { ...S.hh.sharedDay, [d.shared]: +el.value } });
 });
 
 // Wischen nach rechts = abhaken (Zeilen mit data-swipe; senkrechtes Scrollen bleibt frei)
@@ -1166,6 +1190,7 @@ app.addEventListener('toggle', (e) => {
 app.addEventListener('input', (e) => {
   const d = e.target.dataset;
   if (d.setupName !== undefined) S.setup.persons[+d.setupName].name = e.target.value;
+  if (d.setupStart !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) S.setup.start = e.target.value;
 });
 
 // ---------- Aufgabe bearbeiten ----------
@@ -1186,8 +1211,8 @@ function openEditor(id) {
     <label class="field">Intervall<select name="kind">${KINDS.map((k) => opt(k, k === 'custom' ? 'Eigenes: alle X Tage/Wochen/Monate' : KIND_LABEL[k], kind)).join('')}</select></label>
     <div class="inline" data-custom><span>alle</span><input type="number" name="n" min="1" max="999" value="${t.n}" inputmode="numeric">
       <select name="unit">${Object.entries(UNIT_LABEL).map(([u, l]) => opt(u, l[1], t.unit)).join('')}</select></div>
-    <label class="field" data-day>Tag<select name="wd">${opt('', 'Egal – die ganze Woche', t.wd ?? '')}${WEEKDAYS_LONG.map((w, i) => opt(i, `am ${w}`, t.wd ?? '')).join('')}</select></label>
-    <label class="field" data-wk>Welche Woche<select name="wk">${opt(0, 'A', t.wk ? 1 : 0)}${opt(1, 'B', t.wk ? 1 : 0)}</select></label>
+    <label class="field" data-day>Tag<select name="day">${opt('', 'An den Putztagen der zuständigen Person', t.day ?? '')}${WEEKDAYS_LONG.map((w, i) => opt(i, `Fest am ${w}`, t.day ?? '')).join('')}</select></label>
+    <label class="field" data-pos>Termin<select name="pos"></select></label>
     <label class="field" data-permonth>Ca. wie oft pro Monat?<input type="number" name="perMonth" min="0" max="99" step="0.5" inputmode="decimal" value="${t.perMonth ?? ''}"></label>
     <p class="small" data-next></p>
     <label class="field">Zuteilung<select name="assign">${Object.entries(ASSIGN_LABEL).map(([v, l]) => opt(v, v === 'A' || v === 'B' ? `${l} (rotiert)` : v === 'shared' ? `${l} (jede/r darf abhaken)` : v === 'alternate' ? `${l} (jede Periode die andere Person)` : l, t.assign)).join('')}</select></label>
@@ -1207,26 +1232,33 @@ function openEditor(id) {
   const draft = (over = {}) => {
     const k = f.kind.value;
     const iv = k === 'custom' ? { n: Math.max(1, Math.min(999, parseInt(f.n.value, 10) || 1)), unit: f.unit.value } : PRESETS[k];
-    const day = k === 'weekly' || k === 'biweekly';
     return {
       id: 'x', ...iv, assign: f.assign.value, season: f.hasSeason.checked ? { from: +f.from.value, to: +f.to.value } : null,
-      wd: day && f.wd.value !== '' ? +f.wd.value : null, wk: k === 'biweekly' ? +f.wk.value : 0,
+      day: f.day.value === '' ? null : +f.day.value, pos: +f.pos.value || 0,
       created: t.created || S.today, ...over,
     };
   };
   const upcoming = (task, n) => windowsBetween(task, S.hh, S.today, fromDay(toDay(S.today) + 400))
     .filter((w, i, a) => w.end >= S.today && a.findIndex((x) => x.key === w.key) === i).slice(0, n);
+  // Termin-Auswahl: wöchentlich der wievielte Putztag, sonst die Woche im Zeitraum – mit dem nächsten Datum dazu
+  const posOptions = () => {
+    const d = draft({ pos: 0 });
+    const k = kindOf(d);
+    const span = k === 'weekly' ? 3 : weeksPerPeriod(d);
+    const where = { biweekly: '', monthly: ' im Monat', quarterly: ' im Quartal', halfyear: ' im Halbjahr', yearly: ' im Jahr' }[k] ?? '';
+    const cur = Math.min(f.pos.options.length ? +f.pos.value : +(t.pos ?? 0) || 0, span - 1);
+    f.pos.innerHTML = Array.from({ length: span }, (_, i) => {
+      const w = upcoming(draft({ pos: i }), 1)[0];
+      const label = k === 'weekly' ? `${i + 1}. Putztag der Woche` : `${i + 1}. Woche${where}`;
+      return opt(i, `${label}${w ? ` – ${fmtWd(w.start)}` : ''}`, cur);
+    }).join('');
+  };
   const sync = () => {
     const k = f.kind.value;
-    const day = k === 'weekly' || k === 'biweekly';
-    $('[data-day]', form).hidden = !day;
-    $('[data-wk]', form).hidden = k !== 'biweekly';
-    if (k === 'biweekly') {
-      [...f.wk.options].forEach((o, i) => {
-        const w = upcoming(draft({ wk: i }), 1)[0];
-        o.textContent = w ? `erstmals ${w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)}–${fmtWd(w.end)}`}` : (i ? 'B' : 'A');
-      });
-    }
+    const rhythm = !['daily', 'asneeded'].includes(k) && !(k === 'custom' && f.unit.value === 'day');
+    $('[data-day]', form).hidden = !rhythm;
+    $('[data-pos]', form).hidden = !rhythm;
+    if (rhythm) posOptions();
     const next = upcoming(draft(), 3).map((w) => (w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)}–${fmtWd(w.end)}`));
     $('[data-next]', form).textContent = next.length && k !== 'daily' ? `Nächste Termine: ${next.join(' · ')}` : '';
     $('[data-custom]', form).hidden = k !== 'custom';
@@ -1234,9 +1266,7 @@ function openEditor(id) {
     $('[data-season]', form).hidden = !f.hasSeason.checked;
     $('[data-hint]', form).textContent = k === 'asneeded'
       ? 'Bei Bedarf: kein fixer Rhythmus, nie „nicht geschafft“. Einfach abhaken, wenn erledigt – zählt trotzdem im Verlauf und Kalender.'
-      : k === 'halfyear'
-      ? 'Halbjährlich = Frühjahr (März–Mai) und Herbst (Sept.–Nov.), fällig am gemeinsamen Tag.'
-      : k === 'yearly' ? 'Fällig am gemeinsamen Tag.' : '';
+      : k === 'halfyear' ? 'Halbjährlich = Jänner–Juni und Juli–Dezember.' : '';
   };
   sync();
   f.kind.addEventListener('change', () => {
@@ -1244,7 +1274,7 @@ function openEditor(id) {
     sync();
   });
   f.hasSeason.addEventListener('change', sync);
-  for (const el of [f.wd, f.wk, f.n, f.unit, f.from, f.to]) el.addEventListener('change', sync);
+  for (const el of [f.day, f.pos, f.n, f.unit, f.from, f.to, f.assign]) el.addEventListener('change', sync);
   $('[data-close]', form).onclick = closeEditor;
   const del = $('[data-delete]', form);
   if (del) del.onclick = () => {
@@ -1267,8 +1297,8 @@ function openEditor(id) {
       ...iv,
       assign: f.assign.value,
       season: f.hasSeason.checked ? { from: +f.from.value, to: +f.to.value } : null,
-      wd: (k === 'weekly' || k === 'biweekly') && f.wd.value !== '' ? +f.wd.value : null,
-      wk: k === 'biweekly' ? +f.wk.value : 0,
+      day: $('[data-day]', form).hidden || f.day.value === '' ? null : +f.day.value,
+      pos: $('[data-pos]', form).hidden ? null : +f.pos.value || 0,
       created: t.created || S.today,
       order: t.order ?? Math.max(-1, ...S.tasks.map((x) => x.order ?? 0)) + 1,
       min: f.min.value === '' ? null : Math.max(0, Math.min(999, parseInt(f.min.value, 10) || 0)),
