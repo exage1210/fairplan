@@ -1,10 +1,10 @@
 import {
-  KINDS, PRESETS, kindOf, evaluate, relevantKeys, completionId,
+  KINDS, PRESETS, kindOf, evaluate, inSeason, relevantKeys, completionId,
   localToday, toDay, fromDay, windowsBetween, awayDuring,
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
-import { TEMPLATE, TEMPLATE_RULES } from './template.js';
+import { TEMPLATE, TEMPLATE_RULES, RULE_SEASONS } from './template.js';
 
 // ---------- Konstanten & Hilfen ----------
 
@@ -72,7 +72,8 @@ const animalSvg = (color) => {
 const initial = (p) => (p.name || '?').trim().charAt(0).toUpperCase() || '?';
 const avatar = (p, size = '') => {
   const inner = p.avatar === 'photo' && p.photo ? `<img src="${esc(p.photo)}" alt="">` : p.avatar === 'animal' ? animalSvg(p.color) : esc(initial(p));
-  return `<span class="av ${size}" style="--pc:var(--c-${p.color})">${inner}</span>`;
+  const letter = !(p.avatar === 'animal' || (p.avatar === 'photo' && p.photo));
+  return `<span class="av ${size} ${letter ? 'letter' : ''}" data-c="${p.color}" style="--pc:var(--c-${p.color})">${inner}</span>`;
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -265,7 +266,7 @@ function render() {
   const page = PAGES[S.view];
   const scroll = window.scrollY;
   if (page) {
-    app.innerHTML = `<header class="top subtop"><button class="icobtn" data-back aria-label="Zurück">${icon('back', 22)}</button><h1>${page[0]}</h1>
+    app.innerHTML = `<header class="top subtop"><button class="icobtn" data-back aria-label="Zurück">${icon('back', 22)}</button><h1>${typeof page[0] === 'function' ? page[0]() : page[0]}</h1>
       ${S.view === 'profil' ? '<button class="textbtn" data-back>Fertig</button>' : ''}</header>${page[1]()}`;
   } else {
     const me = person(S.me);
@@ -287,7 +288,7 @@ const PAGES = {
   code: ['Haushalts-Code', () => viewCode()],
   aufgaben: ['Aufgabenliste', () => viewTasks()],
   abmachungen: ['Abmachungen', () => viewRules()],
-  putztag: ['Gemeinsamer Putztag', () => viewSharedDay()],
+  putztag: [() => putztagWord(S.hh.sharedDays, 'Gemeinsamer Putztag', 'Gemeinsame Putztage'), () => viewSharedDay()],
   abwesenheit: ['Abwesenheit', () => viewAway()],
   backup: ['Backup', () => viewBackup()],
   start: ['Start des Plans', () => viewStart()],
@@ -459,11 +460,12 @@ function viewToday() {
   const sun = weekEnd(), mon = weekStart();
   const open = items.filter((i) => i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming');
   // Aufgaben: Vergessenes, jetzt Dranes und was diese Woche noch kommt (lässt sich schon vorher abhaken)
-  const tasks = open.filter((i) => mineItem(i) && (i.status !== 'upcoming' || i.due <= sun)).sort(byOwnerRhythm);
+  const tasks = open.filter((i) => mineItem(i) && (i.status !== 'upcoming' || i.due <= sun))
+    .sort((a, b) => (a.status === 'upcoming' ? 1 : 0) - (b.status === 'upcoming' ? 1 : 0) || byOwnerRhythm(a, b));
   const now = tasks.filter((i) => i.status !== 'upcoming');
   const need = items.filter((i) => mineItem(i) && i.status === 'need').sort(byOwnerRhythm);
 
-  const rules = (S.hh.rules || []).filter(Boolean);
+  const rules = (S.hh.rules || []).filter((r) => r && inSeason(RULE_SEASONS[r], +S.today.slice(5, 7)));
   const ruleDone = (r) => S.comps.get(completionId(ruleId(r), ruleKey(), null));
   const openRules = rules.filter((r) => !ruleDone(r));
   const doneRules = rules.filter(ruleDone);
@@ -584,10 +586,23 @@ function viewPlan() {
   const doneOn = new Map();
   for (const c of S.dayComps) { if (!doneOn.has(c.day)) doneOn.set(c.day, []); doneOn.get(c.day).push(c); }
   const hol = new Map([...holidays(+from.slice(0, 4)), ...holidays(+to.slice(0, 4))]);
+  const planned = new Map(); // Tag → Zuständige (null = gemeinsam), ohne Tägliches
+  for (const w of S.tasks.flatMap((t) => windowsBetween(t, S.hh, from, to))) {
+    if (kindOf(w.task) === 'daily') continue;
+    if (!planned.has(w.start)) planned.set(w.start, new Set());
+    planned.get(w.start).add(w.owner);
+  }
 
+  // Gefüllter Punkt: hat an dem Tag etwas erledigt. Ring (ab heute): hat Putztag oder Aufgaben, grau = Gemeinsames.
   const cell = (ds) => {
     const done = doneOn.get(ds) || [];
-    const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id)).map((p) => `<i style="--pc:var(--c-${p.color})"></i>`).join('');
+    const owners = planned.get(ds) || new Set();
+    const rings = ds < S.today || ds < S.hh.setup ? '' : [
+      ...S.hh.persons.filter((p) => !isAway(p.id, ds) && ((p.days?.length ? p.days : [5]).includes(weekdayOf(ds)) || owners.has(p.id)))
+        .map((p) => `<i class="ring-dot" style="--pc:var(--c-${p.color})"></i>`),
+      owners.has(null) ? '<i class="ring-dot" style="--pc:var(--shared)"></i>' : '',
+    ].join('');
+    const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id)).map((p) => `<i style="--pc:var(--c-${p.color})"></i>`).join('') + rings;
     const away = S.hh.persons.find((p) => isAway(p.id, ds));
     const cls = [ds === S.today ? 'today' : '', ds === sel ? 'sel' : '', hol.has(ds) ? 'holiday' : '', away ? 'away' : ''].join(' ');
     const label = asDate(ds).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -774,13 +789,13 @@ function badgeRow() {
 function viewMore() {
   const hh = S.hh, me = person(S.me);
   const awayNames = hh.persons.filter((p) => hh.away?.[p.id]?.to >= S.today).map((p) => esc(p.name)).join(', ');
-  const shared = (hh.sharedDays?.length ? hh.sharedDays : [5]).map((d) => WEEKDAYS[d]).join(', ');
-  const themes = [['dark', 'Dunkel'], ['light', 'Hell'], ['zart', 'Zart']]
+  const shared = sharedDaysOf(hh).map((d) => WEEKDAYS[d]).join(', ');
+  const themes = [['auto', 'Auto'], ['dark', 'Dunkel'], ['light', 'Hell'], ['zart', 'Farbe']]
     .map(([v, l]) => `<button data-theme-set="${v}" aria-pressed="${theme() === v}">${l}</button>`).join('');
   return `<button class="ptile" data-go="profil">${avatar(me, 'l')}<span>${esc(me.name)}</span><span class="chev">${icon('chevron', 18)}</span></button>
     <h2>Wir</h2><div class="tile">
       ${goRow('haushalt', 'users', 'Haushalt')}
-      ${goRow('putztag', 'plan', 'Gemeinsamer Putztag', shared)}
+      ${goRow('putztag', 'plan', putztagWord(hh.sharedDays, 'Gemeinsamer Putztag', 'Gemeinsame Putztage'), shared)}
       ${goRow('abwesenheit', 'away', 'Abwesenheit', awayNames || 'Keine')}
     </div>
     <h2>Aufgaben</h2><div class="tile">
@@ -802,13 +817,19 @@ function viewMore() {
     <p class="version">fairplan · Version ${APP_VERSION}</p>`;
 }
 
+// Ein Putztag oder mehrere: das Wort passt sich an
+const putztagWord = (days, one, many) => ((days?.length || 1) === 1 ? one : many);
+const sharedDaysOf = (hh) => (hh.sharedDays?.length ? hh.sharedDays : [5]);
+
+// Farbwahl wie im Profil: Tier in der Farbe, bereits vergebene ausgegraut
+const colorGrid = (current, takenBy, attr) => `<div class="colors">${COLORS.map(([c, l]) => {
+  const owner = takenBy(c);
+  return `<button ${attr} data-color="${c}" data-c="${c}" aria-pressed="${current === c}" ${owner ? 'disabled' : ''} aria-label="${l}${owner?.name ? `, vergeben an ${esc(owner.name)}` : ''}">${animalSvg(c)}<span>${l}${owner ? '<small>vergeben</small>' : ''}</span></button>`;
+}).join('')}</div>`;
+
 function viewProfile() {
   const hh = S.hh, me = person(S.me), idx = hh.persons.indexOf(me);
   const kind = me.avatar === 'photo' && !me.photo ? 'letter' : me.avatar || 'letter';
-  const colors = COLORS.map(([c, l]) => {
-    const owner = hh.persons.find((p) => p.color === c && p.id !== S.me);
-    return `<button data-person-color="${idx}" data-color="${c}" aria-pressed="${me.color === c}" ${owner ? 'disabled' : ''} aria-label="${l}${owner ? `, vergeben an ${esc(owner.name)}` : ''}" style="--pc:var(--c-${c})">${animalSvg(c)}<span>${l}${owner ? '<small>vergeben</small>' : ''}</span></button>`;
-  }).join('');
   return `<div class="pwrap"><div class="pav">${avatar(me, 'xl')}
       <button class="cam" data-action="photo" aria-label="Foto wählen">${icon('camera', 17)}</button>
       <input type="file" id="photoFile" accept="image/*" hidden></div>
@@ -816,11 +837,12 @@ function viewProfile() {
       <button data-avatar="letter" aria-pressed="${kind === 'letter'}" aria-label="Anfangsbuchstabe">${esc(initial(me))}</button>
       <button data-avatar="animal" aria-pressed="${kind === 'animal'}" aria-label="${ANIMALS[me.color]?.name ?? 'Tier'}">${animalSvg(me.color)}</button>
       ${me.photo ? `<button data-avatar="photo" aria-pressed="${kind === 'photo'}" aria-label="Foto"><img src="${esc(me.photo)}" alt=""></button>` : ''}
-    </div></div>
+    </div>
+    ${me.photo ? '<button class="textbtn danger" data-action="del-photo">Foto löschen</button>' : ''}</div>
     <h2><label for="pname">Name</label></h2>
     <input type="text" id="pname" data-person-name="${idx}" value="${esc(me.name)}" maxlength="30">
-    <h2>Deine Farbe</h2><div class="colors">${colors}</div>
-    <h2>Deine Putztage</h2>${dayChips(me.days?.length ? me.days : [5], `data-person-day="${idx}"`)}
+    <h2>Deine Farbe</h2>${colorGrid(me.color, (c) => hh.persons.find((p) => p.color === c && p.id !== S.me), `data-person-color="${idx}"`)}
+    <h2>${putztagWord(me.days, 'Dein Putztag', 'Deine Putztage')}</h2>${dayChips(me.days?.length ? me.days : [5], `data-person-day="${idx}"`)}
     <span class="hint">Ein oder mehrere Tage, an denen deine Aufgaben dran sind.</span>`;
 }
 
@@ -841,8 +863,8 @@ function viewCode() {
     ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}`;
 }
 
-const viewSharedDay = () => `<h2>Gemeinsamer Putztag</h2>${dayChips(S.hh.sharedDays?.length ? S.hh.sharedDays : [5], 'data-shared-day')}
-  <span class="hint">An diesen Tagen ist Gemeinsames dran.</span>`;
+const viewSharedDay = () => `<h2>${putztagWord(S.hh.sharedDays, 'An diesem Tag', 'An diesen Tagen')}</h2>${dayChips(sharedDaysOf(S.hh), 'data-shared-day')}
+  <span class="hint">Hier ist Gemeinsames dran, ein oder mehrere Tage.</span>`;
 
 function viewAway() {
   const rows = S.hh.persons.map((p) => {
@@ -857,7 +879,7 @@ function viewAway() {
 
 const viewRules = () => `<h2>Vorschläge</h2>${ruleChips(S.hh.rules || [], 'data-rule-suggest')}
   <label class="field">Eigene Abmachungen (eine pro Zeile)<textarea data-rules rows="5" placeholder="Pflanzen am Fensterbrett gießen&#10;Post reinholen">${esc(ownRules().join('\n'))}</textarea></label>
-  <span class="hint">Selbstverständliches für jeden Tag: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für alle ab. Nie offen, zählt als Bonus.</span>`;
+  <span class="hint">Selbstverständliches für jeden Tag: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für alle ab. Nie offen, zählt als Bonus. „Pflanzen gießen bei Hitze“ erscheint nur von Juni bis August.</span>`;
 
 const viewBackup = () => `<p class="small" style="margin-top:18px">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt Aufgaben und Haushalts-Einstellungen durch die aus der Datei, der Verlauf bleibt und wird ergänzt.</p>
   <div class="btnrow"><button class="btn" data-action="export">Daten exportieren</button><button class="btn" data-action="import">Daten importieren</button></div>
@@ -872,7 +894,7 @@ function renderWhoAmI() {
   app.innerHTML = `<header class="top">${LOGO}</header>
     <h2>Wer bist du?</h2>
     <p>Einmalig pro Gerät. Deine Aufgaben stehen danach zuerst.</p>
-    <div class="btnrow">${S.hh.persons.map((p) => `<button class="btn block" data-me="${p.id}">${pn(p.id)}</button>`).join('')}</div>`;
+    <div class="tile">${S.hh.persons.map((p) => `<button class="mrow" data-me="${p.id}">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span><span class="chev">${icon('chevron', 16)}</span></button>`).join('')}</div>`;
 }
 
 // ---------- Einrichtung ----------
@@ -912,13 +934,15 @@ function renderSetup() {
       <div class="btnrow"><button class="btn block" data-setup="join">Beitreten</button></div>${err}${local}`;
   } else if (st.step === 'persons') {
     body = `<h2>${st.reset ? 'Plan neu einrichten · ' : ''}Schritt 1 von 3 · Personen</h2>
-      ${st.persons.map((p, i) => `<div class="setting">
-        <label class="field">Name Person ${i + 1}<input type="text" data-setup-name="${i}" value="${esc(p.name)}" maxlength="30"></label>
-        <div class="colors">${COLORS.map(([c, l]) => `<button data-setup-color="${i}" data-color="${c}" aria-pressed="${p.color === c}"><i class="sw" style="--pc:var(--c-${c})"></i>${l}</button>`).join('')}</div>
-        <p class="small">Wann ist der Putztag? (mehrere möglich)</p>${dayChips(p.days, `data-setup-day="${i}"`)}
-      </div>`).join('')}
-      <div class="setting"><p class="small">Gemeinsamer Putztag (für Gemeinsames)</p>${dayChips(st.shared, 'data-setup-shared')}</div>
-      <p class="small">An ihren Putztagen sind die Aufgaben der jeweiligen Person dran. Später in den Optionen änderbar.</p>
+      ${st.persons.map((p, i) => `<section class="tile setup-person">
+        <div class="setup-head">${avatar({ ...p, name: p.name || `${i + 1}` }, 'l')}<strong>Person ${i + 1}</strong></div>
+        <h2><label for="sname${i}">Name</label></h2>
+        <input type="text" id="sname${i}" data-setup-name="${i}" value="${esc(p.name)}" maxlength="30">
+        <h2>Farbe</h2>${colorGrid(p.color, (c) => st.persons.find((o, j) => j !== i && o.color === c), `data-setup-color="${i}"`)}
+        <h2>${putztagWord(p.days, 'Putztag', 'Putztage')}</h2>${dayChips(p.days, `data-setup-day="${i}"`)}
+      </section>`).join('')}
+      <section class="tile setup-person"><h2 style="margin-top:0">${putztagWord(st.shared, 'Gemeinsamer Putztag', 'Gemeinsame Putztage')}</h2>${dayChips(st.shared, 'data-setup-shared')}
+        <span class="hint">Ein oder mehrere Tage, später im Profil und unter „Mehr“ änderbar.</span></section>
       ${err}
       <div class="btnrow"><button class="btn" data-setup="${st.reset ? 'cancel' : 'start'}">${st.reset ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
   } else if (st.step === 'template') {
@@ -1059,11 +1083,14 @@ const standalone = () => navigator.standalone || matchMedia('(display-mode: stan
 
 // ---------- Aktionen ----------
 
-function theme() { return document.documentElement.dataset.theme || 'dark'; }
+// Darstellung: Auto folgt dem Handy (dunkel → Dunkel, hell → Farbe), sonst die eigene Wahl
+const systemLight = matchMedia('(prefers-color-scheme: light)');
+function theme() { return ls.get('theme') || 'auto'; }
 function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  ls.set('theme', t);
+  ls.set('theme', t === 'auto' ? null : t);
+  document.documentElement.dataset.theme = t === 'auto' ? (systemLight.matches ? 'zart' : 'dark') : t;
 }
+systemLight.addEventListener('change', () => { if (theme() === 'auto') { setTheme('auto'); render(); } });
 
 // Kurzes Vibrieren: Android über navigator.vibrate, iPhone (Safari 17.4+) über einen versteckten Schalter
 const canHaptic = 'vibrate' in navigator || 'switch' in HTMLInputElement.prototype;
@@ -1333,6 +1360,11 @@ app.addEventListener('click', (e) => {
     case 'save-backup': return saveBackup();
     case 'import': $('#importFile').click(); return;
     case 'photo': $('#photoFile').click(); return;
+    case 'del-photo': {
+      if (!confirm('Foto löschen?')) return;
+      const persons = S.hh.persons.map(({ photo, ...p }) => (p.id === S.me ? { ...p, avatar: p.avatar === 'photo' ? 'letter' : p.avatar } : { ...p, ...(photo ? { photo } : {}) }));
+      return updateHH({ persons });
+    }
     case 'badge':
       Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});
       return;
@@ -1460,7 +1492,12 @@ app.addEventListener('toggle', (e) => {
 
 app.addEventListener('input', (e) => {
   const d = e.target.dataset;
-  if (d.setupName !== undefined) S.setup.persons[+d.setupName].name = e.target.value;
+  if (d.setupName !== undefined) {
+    const p = S.setup.persons[+d.setupName];
+    p.name = e.target.value;
+    const av = e.target.closest('.setup-person')?.querySelector('.av');
+    if (av) av.textContent = p.name.trim().charAt(0).toUpperCase() || +d.setupName + 1;
+  }
 });
 
 // ---------- Aufgabe bearbeiten ----------

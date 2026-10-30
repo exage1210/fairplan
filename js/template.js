@@ -18,12 +18,15 @@ export const TEMPLATE_RULES = [
   'Einkaufen',
   'Kochen',
   'Kurz aufräumen',
+  'Müll rausbringen',
+  'Pflanzen gießen bei Hitze',
 ];
 
+// Abmachungen, die nur in einer Saison erscheinen (Monate)
+export const RULE_SEASONS = { 'Pflanzen gießen bei Hitze': { from: 6, to: 8 } };
+
 export const TEMPLATE = [
-  t('Müll rausbringen', N, 'shared', 5, { perMonth: 8 }),
   t('Pflanzen kontrollieren', W, 'A', 5),
-  t('Pflanzen gießen bei Hitze', N, 'shared', 10, { perMonth: 8, ...season(6, 8) }),
 
   t('Wäsche (waschen, aufhängen, zusammenlegen)', W, 'A', 60),
   t('Handtücher wechseln', W, 'A', 5),
