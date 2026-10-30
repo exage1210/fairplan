@@ -57,6 +57,7 @@ Etappen 1–6 gesammelt gebaut; Etappe 7 (Einrichtung neu) kommt extra. Gilt vor
 - Bewusst nicht gebaut: Mitteilungen und Tägliche Erinnerung (Push später).
 - Feinschliff v20: Einrichtung Schritt 1 nutzt dieselben Bausteine wie das Profil (`colorGrid`, `dayChips`). Vorlage: Müll rausbringen und Pflanzen gießen bei Hitze sind Abmachungen (bestehender Plan ändert sich nicht automatisch, dort per Vorschlag antippen und alte Aufgabe löschen). Plan: gefüllter Punkt = erledigt, Ring ab heute = Putztag oder geplante Aufgaben (grau = Gemeinsames). Avatar: Tier in Personenfarbe, Kreis nach Darstellung (`--av-bg`); Buchstabe bleibt dunkel auf vollem Farbkreis. Darstellung „Zart“ heißt in der Oberfläche „Farbe“ (Wert bleibt `zart`). „Putztag/Putztage“ passt sich der Anzahl an.
 - v21: Aufgaben auf Aktuell: jetzt Dranes vor „diese Woche“, darin eigene → gemeinsame → Rhythmus. Saison für Abmachungen nur über `RULE_SEASONS` in `template.js` (Pflanzen gießen bei Hitze Juni–August; kein Eingabefeld für eigene). Darstellung Auto (kein gespeichertes `fairplan.theme`): Handy dunkel → Dunkel, hell → Farbe; eigene Wahl bleibt, bis man Auto antippt.
+- v22: Wer einen Haushalt anlegt, ist automatisch Person 1 (nur Beitretende werden gefragt). Statuskarte: „Alles erledigt“ nur, wenn heute etwas Eigenes erledigt wurde, sonst „Heute ist nichts dran.“ Abmelden entfernt auch `fairplan.accent` und den `?join=`-Teil der Adresse.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
