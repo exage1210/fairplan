@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.28';
+const APP_VERSION = '2.0.29';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -149,6 +149,10 @@ const pn = (id) => {
   return p ? `<span class="pn"><i class="sw" style="--pc:var(--c-${p.color})"></i>${esc(p.name)}</span>` : '';
 };
 const byName = (id) => { const p = person(id); return p ? `<span class="by" data-c="${p.color}">${esc(p.name)}</span>` : '?'; };
+// „dir“ statt des eigenen Namens: zeigt auch gleich, welche Häkchen man zurücknehmen kann
+const byWho = (id) => (id === S.me ? `<span class="by" data-c="${person(id)?.color}">dir</span>` : byName(id));
+const timeOf = (c) => new Date(c.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
+const forWhom = (c) => (c.forPerson && c.forPerson !== c.by ? ` für ${c.forPerson === S.me ? 'dich' : esc(person(c.forPerson)?.name ?? '?')}` : '');
 
 // ---------- Haushalt auf dem Gerät merken ----------
 
@@ -394,8 +398,7 @@ function statusText(it) {
     case 'due': return kindOf(it.task) === 'daily' ? '' : `dran bis ${fmtDate(it.end)}`;
     case 'upcoming': return `dran ${rangeLabel(it.due, it.end)}`;
     case 'done': {
-      const proxy = c.forPerson && c.forPerson !== c.by ? ` für ${esc(person(c.forPerson)?.name ?? '?')}` : '';
-      return `erledigt von ${byName(c.by)}${proxy}, ${fmtDate(c.day)}`;
+      return `erledigt von ${byWho(c.by)}${forWhom(c)} · ${fmtDate(c.day)}, ${timeOf(c)}`;
     }
     case 'need': return '';
     case 'offseason': return `Saison ${seasonLabel(it.task.season)}${it.next ? ` · ab ${fmtDate(it.next)}` : ''}`;
@@ -479,7 +482,7 @@ function ruleRow(text) {
     check: `<input type="checkbox" data-action="toggle-rule" data-rule="${esc(text)}" ${c ? 'checked' : ''} ${locked ? 'disabled' : ''}
       aria-label="${esc(text)} erledigt">`,
     body: `<div class="body"><div class="head"><span class="title">${esc(text)}</span><span class="kind">täglich</span></div>
-      ${c ? `<div class="meta">erledigt von ${byName(c.by)}</div>` : ''}</div>`,
+      ${c ? `<div class="meta">erledigt von ${byWho(c.by)} · ${timeOf(c)}</div>` : ''}</div>`,
   });
 }
 
@@ -603,7 +606,7 @@ function viewToday() {
     ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.length), `<div class="list">${doneRows}</div>`) : ''}`;
 }
 
-const doneText = (it) => `erledigt von ${byName(it.completion.by)}`;
+const doneText = (it) => `erledigt von ${byWho(it.completion.by)}${forWhom(it.completion)} · ${timeOf(it.completion)}`;
 
 // ---------- Aufgabenliste (Mehr) ----------
 
@@ -719,7 +722,7 @@ function dayDetail(sel, doneOn, holiday) {
   }).join('');
   const doneRows = done.map((c) => {
     const p = person(c.by);
-    const time = new Date(c.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
+    const time = timeOf(c);
     const proxy = c.forPerson && c.forPerson !== c.by ? ` · für ${esc(person(c.forPerson)?.name ?? '?')}` : '';
     const rh = compRhythm(c);
     return `<div class="drow">${p ? avatar(p, 's') : ''}<span class="t">${esc(c.title)}<small>${esc(p?.name ?? '?')}${rh ? ` · ${rh}` : ''}${proxy}</small></span>
