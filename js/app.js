@@ -170,6 +170,8 @@ async function init() {
   if (join.length === 16 && join !== S.code
     && (!S.code || confirm('Diesem Haushalt beitreten? Der bisherige wird auf diesem Gerät abgemeldet.'))) {
     ls.set('me', null);
+    ls.set('accent', null);
+    delete document.documentElement.dataset.accent;
     S.me = null;
     startSetup();
     joinHousehold(join);
@@ -453,7 +455,7 @@ const doneMap = () => new Map([...S.dayComps.map((c) => [c.id, c]), ...S.comps])
 const myDays = () => S.dayComps.filter((c) => c.by === S.me);
 const isAway = (id, day) => { const a = S.hh.away?.[id]; return !!(a?.from && a?.to && a.from <= day && day <= a.to); };
 const myStreaks = () => streaks(myDays().map((c) => c.day), S.today, (d) => isAway(S.me, d));
-const daysText = (n) => `${n} ${n === 1 ? 'Tag' : 'Tage'}`;
+const daysText = (n) => (n ? `${n} ${n === 1 ? 'Tag' : 'Tage'}` : 'Noch keine');
 
 function viewToday() {
   const items = allItems();
@@ -490,19 +492,19 @@ function viewToday() {
     .filter((n) => n.date && n.date > S.today).sort((a, b) => a.date.localeCompare(b.date))[0];
   const away = S.hh.away?.[S.me];
   const meAway = away?.from && away.from <= S.today && S.today <= away.to;
-  const allDone = !now.length;
+  const allDone = !now.length && x > 0;
   const me = person(S.me);
 
   const card = `<section class="card ${allDone ? 'alldone' : ''}">
       <div><span class="card-label">Deine Aufgaben heute</span>
         <span class="card-big">${x}<small> / ${y}</small></span></div>
-      <div><div class="bar-head"><span>Diese Woche ${weekDone} von ${weekAll}</span>${bonus ? `<span class="pill">+${bonus} Bonus</span>` : ''}</div>
-        <div class="bar"><i style="width:${weekAll ? Math.round((weekDone / weekAll) * 100) : 0}%"></i></div></div>
-      <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : `Noch ${now.length} offen`}</span>
+      ${weekAll || bonus ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus ? `<span class="pill">+${bonus} Bonus</span>` : ''}</div>
+        ${weekAll ? `<div class="bar"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div>` : ''}</div>` : ''}
+      <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : now.length ? `Noch ${now.length} offen` : 'Heute ist nichts dran.'}</span>
       ${next ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
       <hr>
       <div class="duo"><div><span>Deine Woche</span><b>${weekCount} erledigt</b></div>
-        <div><span>Serie</span><b>${streakText} in Folge</b></div></div>
+        <div><span>Serie</span><b>${current ? `${streakText} in Folge` : streakText}</b></div></div>
     </section>
     ${allDone && !meAway ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${animalSvg(me.color)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
   S.cheered = allDone; // Tier nur beim ersten Mal einblenden, nicht bei jedem Neuzeichnen
@@ -1018,6 +1020,8 @@ async function createHousehold(withTemplate) {
   }
   ls.set('code', code);
   S.code = code;
+  ls.set('me', 'p1'); // wer anlegt, ist Person 1
+  S.me = 'p1';
   st.step = 'created';
   renderSetup();
 }
@@ -1370,7 +1374,8 @@ app.addEventListener('click', (e) => {
       return;
     case 'leave':
       if (!confirm('Haushalt auf diesem Gerät abmelden?')) return;
-      ls.set('code', null); ls.set('me', null); location.reload();
+      ls.set('code', null); ls.set('me', null); ls.set('accent', null);
+      location.replace(location.pathname); // ohne ?join=, sonst wäre man gleich wieder drin
   }
 });
 
@@ -1394,6 +1399,7 @@ function setupAction(a) {
   else if (a === 'done') { S.setup = null; connect(S.code); return; }
   window.scrollTo(0, 0);
   renderSetup();
+  if (st.error) $('#app .ov')?.scrollIntoView({ block: 'center' });
 }
 
 app.addEventListener('change', (e) => {
