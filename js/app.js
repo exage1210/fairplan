@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.29';
+const APP_VERSION = '2.0.30';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -500,7 +500,7 @@ const listOf = (items, opts) => (items.length ? `<div class="list">${items.map((
 
 // Zahl am App-Icon: nicht Geschafftes + jetzt dran (eigenes und gemeinsames), ohne Tägliches
 function badgeCount() {
-  return allItems().filter((i) => (i.owner === S.me || i.owner === null) && kindOf(i.task) !== 'daily'
+  return allItems().filter((i) => (i.owner === S.me || i.owner === null) && !myPaused(i) && kindOf(i.task) !== 'daily'
     && (i.status === 'overdue' || i.status === 'due')).length;
 }
 let lastBadge = -1;
@@ -532,12 +532,17 @@ const isAway = (id, day) => { const a = S.hh.away?.[id]; return !!(a?.from && a?
 const myStreaks = () => streaks(myDays().map((c) => c.day), S.today, (d) => isAway(S.me, d));
 const daysText = (n) => (n ? `${n} ${n === 1 ? 'Tag' : 'Tage'}` : 'Noch keine');
 
+// Eigene Aufgaben pausieren, solange man heute abwesend ist oder ihr Termin in die Abwesenheit fällt.
+// Andere sehen sie weiter und können vertreten.
+const myPaused = (i) => i.owner === S.me && i.due && i.end
+  && (isAway(S.me, S.today) || awayDuring(S.hh, S.me, toDay(i.due), toDay(i.end)));
+
 function viewToday() {
   const items = allItems();
   const sun = weekEnd(), mon = weekStart();
   const open = items.filter((i) => i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming');
   // Aufgaben: Vergessenes, jetzt Dranes und was diese Woche noch kommt (lässt sich schon vorher abhaken)
-  const tasks = open.filter((i) => mineItem(i) && (i.status !== 'upcoming' || i.due <= sun))
+  const tasks = open.filter((i) => mineItem(i) && !myPaused(i) && (i.status !== 'upcoming' || i.due <= sun))
     .sort((a, b) => (a.status === 'upcoming' ? 1 : 0) - (b.status === 'upcoming' ? 1 : 0) || byOwnerRhythm(a, b));
   const now = tasks.filter((i) => i.status !== 'upcoming');
   const need = items.filter((i) => mineItem(i) && i.status === 'need').sort(byOwnerRhythm);
@@ -834,15 +839,13 @@ function viewStats() {
   const months = [];
   for (let d = toDay(monthBounds(S.hh.setup)[0]); d < toDay(monthBounds(S.today)[0]); d = toDay(monthBounds(fromDay(d))[1]) + 1) months.push(monthBounds(fromDay(d)));
   const wholeMonth = months.slice(-24).some(([a, b]) => { const l = dueBetween(S.tasks, S.hh, a, b, byId, S.me); return l.length && l.every((w) => w.done); });
-  const [ma, mb] = monthBounds(S.today);
-  const monthOpen = dueBetween(S.tasks, S.hh, ma, mb, byId, S.me).filter((w) => !w.done).length;
   const badges = [
     ['Erste Woche', sinceStart >= 7, left(sinceStart, 7), MILESTONES.check],
     ['7 Tage Serie', longest >= 7, left(longest, 7), MILESTONES.flame],
     ['100 Aufgaben', tasks.length >= 100, left(tasks.length, 100), MILESTONES.cup],
     ['30 Tage Serie', longest >= 30, left(longest, 30), MILESTONES.flame],
     ['100 Bonus', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
-    ['Ganzer Monat', wholeMonth, wholeMonth ? 'geschafft' : `noch ${monthOpen}`, MILESTONES.cal],
+    ['Ganzer Monat', wholeMonth, wholeMonth ? 'geschafft' : 'läuft', MILESTONES.cal],
   ].map(([name, on, sub, path]) => `<div class="badge ${on ? 'on' : ''}"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg></i><b>${name}</b><small>${sub}</small></div>`).join('');
 
   const seg = [['week', 'Woche'], ['month', 'Monat'], ['year', 'Jahr']].map(([v, l]) => `<button data-stat-mode="${v}" aria-pressed="${S.statMode === v}">${l}</button>`).join('');
