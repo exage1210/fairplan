@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
   packageOwners, inSeason, windowsBetween, awayDuring,
-  timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays,
+  timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, streaks,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -258,4 +258,33 @@ test('Feiertage Österreich inkl. Ostern', () => {
   assert.equal(h.get('2026-06-04'), 'Fronleichnam');
   assert.equal(h.get('2026-10-26'), 'Nationalfeiertag');
   assert.equal(holidays(2027).get('2027-03-29'), 'Ostermontag');
+});
+
+test('streaks: heute darf fehlen, Lücke bricht, Abwesenheit nicht', () => {
+  assert.deepEqual(streaks([], '2026-11-10'), { current: 0, longest: 0 });
+  assert.deepEqual(streaks(['2026-11-08', '2026-11-09'], '2026-11-10'), { current: 2, longest: 2 });
+  assert.deepEqual(streaks(['2026-11-08', '2026-11-09', '2026-11-10'], '2026-11-10'), { current: 3, longest: 3 });
+  assert.deepEqual(streaks(['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-09'], '2026-11-10'), { current: 1, longest: 3 });
+  assert.deepEqual(streaks(['2026-11-06', '2026-11-09'], '2026-11-10', (d) => d === '2026-11-07' || d === '2026-11-08'), { current: 2, longest: 2 });
+});
+
+test('dueBetween: eigene und gemeinsame im Bereich, fremd Erledigtes fällt heraus', () => {
+  const ctx = { setup: '2026-10-05', persons: [{ id: 'p1', days: [5] }, { id: 'p2', days: [5] }], sharedDays: [5] };
+  const mk = (id, assign) => ({ id, n: 1, unit: 'week', assign, created: '2026-10-05' });
+  const tasks = [mk('a', 'A'), mk('b', 'B'), mk('s', 'shared'), mk('t', 'shared')];
+  const key = 'weekly:2026-11-09';
+  const done = new Map([
+    [completionId('a', key, null), { by: 'p1' }],
+    [completionId('t', key, null), { by: 'p2' }],
+  ]);
+  const list = dueBetween(tasks, ctx, '2026-11-09', '2026-11-15', done, 'p1');
+  assert.deepEqual(list.map((w) => [w.task.id, !!w.done]), [['a', true], ['s', false]]);
+});
+
+test('dueBetween: Pausiertes zählt nicht, Termine außerhalb auch nicht', () => {
+  const ctx = { setup: '2026-10-05', persons: [{ id: 'p1', days: [5] }, { id: 'p2', days: [5] }], sharedDays: [5],
+    away: { p1: { from: '2026-11-09', to: '2026-11-20' } } };
+  const tasks = [{ id: 'a', n: 1, unit: 'week', assign: 'A', created: '2026-10-05' }];
+  assert.equal(dueBetween(tasks, ctx, '2026-11-09', '2026-11-15', new Map(), 'p1').length, 0);
+  assert.equal(dueBetween(tasks, { ...ctx, away: {} }, '2026-11-09', '2026-11-13', new Map(), 'p1').length, 0);
 });
