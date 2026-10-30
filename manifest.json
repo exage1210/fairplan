@@ -1,7 +1,7 @@
 {
   "name": "Fairplan",
   "short_name": "Fairplan",
-  "description": "Putzplan für zwei",
+  "description": "Fairplan – der Putzplan für deinen Haushalt",
   "lang": "de",
   "start_url": "./",
   "scope": "./",

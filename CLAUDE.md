@@ -60,6 +60,7 @@ Etappen 1–6 gesammelt gebaut; Etappe 7 (Einrichtung neu) kommt extra. Gilt vor
 - v22: Wer einen Haushalt anlegt, ist automatisch Person 1 (nur Beitretende werden gefragt). Statuskarte: „Alles erledigt“ nur, wenn heute etwas Eigenes erledigt wurde, sonst „Heute ist nichts dran.“ Abmelden entfernt auch `fairplan.accent` und den `?join=`-Teil der Adresse.
 - v23: Abmachungen starten eingeklappt (Wahl pro Gerät: `fairplan.open-rules`). Punkte und Ringe im Plan über `--d-<farbe>` (hell/Farbe kräftig). Tagesdetail nennt Putztag ohne Aufgaben. Unterseiten und Editor nutzen `history`, damit die Zurück-Taste funktioniert.
 - v24: Code und Person zusätzlich in IndexedDB (`fairplan-keep`) und Cookie, `restoreIdentity` holt sie zurück, wenn localStorage leer ist (Absicherung, Ursache am iPhone noch nicht bestätigt). „Nicht gefunden“ nur noch nach Antwort vom Server, sonst nach 15 s Hinweis auf fehlende Verbindung. Versionszeile zeigt App/Browser.
+- Spruch: in der App „Fairplan – der Putzplan für deinen Haushalt“, für die Werbung „Fairplan – weniger diskutieren, mehr erledigt“.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
