@@ -63,6 +63,7 @@ Etappen 1–6 gesammelt gebaut; Etappe 7 (Einrichtung neu) kommt extra. Gilt vor
 - Plan (v26): „Nächste 2 Wochen“ und Tagesdetail sortieren eigene → gemeinsame → andere, darin nach Rhythmus (`byMeFirst`).
 - Abmachungen (v27): `RULE_COMMON` immer sichtbar, `RULE_GROUPS` zum Aufklappen, `RULE_SUGGESTIONS` alle; `TEMPLATE_RULES` bleibt, was die Vorlage vorauswählt. Text = Kennung, Vorschläge nicht umformulieren. Eigene Abmachungen (v28) als Knöpfe mit ×, „+ Abmachung“ öffnet eine Eingabe, die für weitere offen bleibt (`addOwnRule`). Geplant für Etappe 7: Frage „Was gibt es bei euch?“ steuert Vorschläge und Vorlage.
 - `render` wartet, solange ein Finger aufliegt (`pointerDown`), sonst verschwindet der Knopf unter dem Finger und der Tipp geht verloren.
+- Erledigt-Zeile (v29): „erledigt von dir/Name · Uhrzeit“ (`byWho`, `timeOf`, `forWhom`), in der Aufgabenliste mit Datum.
 - Spruch: in der App „Fairplan – der Putzplan für deinen Haushalt“, für die Werbung „Fairplan – weniger diskutieren, mehr erledigt“.
 
 ## Offen / Ideen
