@@ -78,6 +78,7 @@ const S = {
   calMonth: null, // 'YYYY-MM', null = aktueller Monat
   calDay: null, // Tag im offenen Panel, null = Panel zu
   panelAnim: false, // Panel beim Öffnen einmal hereinfahren lassen
+  backup: null, // fertig geladene Sicherung, wartet auf „Datei sichern“
   today: localToday(),
   hh: undefined, // undefined = lädt, null = nicht gefunden
   tasks: [],
@@ -627,8 +628,10 @@ function viewSettings() {
     <div class="btnrow"><button class="btn" data-action="copy">Code kopieren</button></div>
     ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}
     <h2>Backup</h2>
-    <p class="small">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt die Aufgaben durch die aus der Datei.</p>
+    <p class="small">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt Aufgaben und Haushalts-Einstellungen durch die aus der Datei, der Verlauf bleibt und wird ergänzt.</p>
     <div class="btnrow"><button class="btn" data-action="export">Daten exportieren</button><button class="btn" data-action="import">Daten importieren</button></div>
+    ${S.backup ? `<p class="small">Sicherung bereit: ${backupCounts(S.backup.data)}</p>
+    <div class="btnrow"><button class="btn" data-action="save-backup">Datei sichern</button></div>` : ''}
     <input type="file" id="importFile" accept=".json,application/json" hidden>
     <h2>Start des Plans</h2>
     <label class="field">Ab diesem Tag zählen die Termine<input type="date" data-start value="${esc(hh.setup)}"></label>
@@ -917,10 +920,23 @@ function toggleRule(input) {
 
 // ---------- Backup ----------
 
+const backupCounts = (d) => `Aufgaben: ${d.tasks.length}, Erledigungen: ${d.completions.length}`;
+
+// Erst laden, dann eigener Knopf zum Sichern: das iPhone erlaubt Teilen nur direkt nach einem Tippen
 async function exportData() {
   try {
     const data = { app: 'fairplan', version: 1, exportedAt: new Date().toISOString(), ...(await S.store.exportAll(S.code)) };
-    const name = `fairplan-backup-${S.today}.json`;
+    S.backup = { data, name: `fairplan-backup-${S.today}.json` };
+    render();
+  } catch (e) {
+    console.error(e);
+    snack('Export fehlgeschlagen (offline?).');
+  }
+}
+
+async function saveBackup() {
+  const { data, name } = S.backup;
+  try {
     const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
     const file = new File([blob], name, { type: 'application/json' });
     if (navigator.canShare?.({ files: [file] })) {
@@ -930,8 +946,11 @@ async function exportData() {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
+    S.backup = null;
+    render();
+    snack('Sicherung erstellt.');
   } catch (e) {
-    if (e?.name !== 'AbortError') { console.error(e); snack('Export fehlgeschlagen (offline?).'); }
+    if (e?.name !== 'AbortError') { console.error(e); snack('Sichern fehlgeschlagen.'); }
   }
 }
 
@@ -941,11 +960,12 @@ async function importFile(input) {
   if (!file) return;
   let data;
   try { data = JSON.parse(await file.text()); } catch { data = null; }
-  if (data?.app !== 'fairplan' || !data.household || !Array.isArray(data.tasks) || !Array.isArray(data.completions)) {
+  const hasIds = (list) => Array.isArray(list) && list.every((x) => x?.id && typeof x.id === 'string');
+  if (data?.app !== 'fairplan' || !Array.isArray(data.household?.persons) || !hasIds(data.tasks) || !hasIds(data.completions)) {
     return snack('Das ist keine Fairplan-Sicherung.');
   }
   const when = data.exportedAt ? fmtLong(data.exportedAt.slice(0, 10)) : '?';
-  if (!confirm(`Sicherung vom ${when} einspielen? Die Aufgaben werden durch die aus der Datei ersetzt.`)) return;
+  if (!confirm(`Sicherung vom ${when} einspielen (${backupCounts(data)})? Aufgaben und Haushalts-Einstellungen werden durch die aus der Datei ersetzt.`)) return;
   try {
     await S.store.importAll(S.code, data);
     snack('Sicherung eingespielt.');
@@ -1059,6 +1079,7 @@ app.addEventListener('click', (e) => {
       return;
     case 'reset-plan': window.scrollTo(0, 0); return startSetup(true);
     case 'export': return exportData();
+    case 'save-backup': return saveBackup();
     case 'import': $('#importFile').click(); return;
     case 'badge':
       Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});

@@ -87,7 +87,8 @@ async function openFirestore() {
     deleteTask: (code, id) => write(fs.deleteDoc(fs.doc(col(code, 'tasks'), id))),
     // Backup: alles lesen bzw. zurückschreiben (Aufgaben werden ersetzt, Erledigungen ergänzt)
     async exportAll(code) {
-      const [h, t, c] = await Promise.all([fs.getDoc(hh(code)), fs.getDocs(col(code, 'tasks')), fs.getDocs(col(code, 'completions'))]);
+      // Direkt vom Server: der Offline-Cache könnte nur einen Teil der Erledigungen enthalten
+      const [h, t, c] = await Promise.all([fs.getDocFromServer(hh(code)), fs.getDocsFromServer(col(code, 'tasks')), fs.getDocsFromServer(col(code, 'completions'))]);
       const list = (snap) => snap.docs.map((d) => ({ ...d.data(), id: d.id }));
       return { household: h.data(), tasks: list(t), completions: list(c) };
     },
