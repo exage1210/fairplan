@@ -56,7 +56,8 @@ async function openFirestore() {
       for (const t of tasks) batch.set(fs.doc(col(code, 'tasks'), t.id), t);
       write(batch.commit());
     },
-    watchHousehold: (code, cb) => fs.onSnapshot(hh(code), (s) => cb(s.data() || null), fail),
+    // Leerer Zwischenspeicher heißt nicht „gibt's nicht“: das entscheidet nur der Server
+    watchHousehold: (code, cb) => fs.onSnapshot(hh(code), (s) => { if (s.exists() || !s.metadata.fromCache) cb(s.data() || null); }, fail),
     watchTasks: (code, cb) => fs.onSnapshot(col(code, 'tasks'), (s) => cb(s.docs.map((d) => ({ ...d.data(), id: d.id }))), fail),
     watchCompletions(code, keys, cb) {
       const parts = [];

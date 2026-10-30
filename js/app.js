@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0';
+const APP_VERSION = '2.0.24';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -137,7 +137,7 @@ const S = {
   daySub: null, // Erledigungen ab dayFrom (für Karte, Plan, Statistik)
   dayFrom: null,
   dayComps: [],
-  open: {}, // aufgeklappte Bereiche (details) über Neuzeichnen hinweg
+  open: { rules: ls.get('open-rules') === '1' }, // aufgeklappte Bereiche (details) über Neuzeichnen hinweg
   pendingRender: false,
 };
 
@@ -149,12 +149,55 @@ const pn = (id) => {
 };
 const byName = (id) => { const p = person(id); return p ? `<span class="by" data-c="${p.color}">${esc(p.name)}</span>` : '?'; };
 
+// ---------- Haushalt auf dem Gerät merken ----------
+
+// Code und Person liegen zusätzlich in IndexedDB und einem Cookie: geht localStorage verloren
+// (das iPhone schreibt ihn verzögert und kann ihn beim Beenden verlieren), holen wir sie von dort zurück.
+const KEEP_DB = 'fairplan-keep';
+const withTimeout = (p, ms = 1500) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]);
+function keepStore(mode, fn) {
+  return withTimeout(new Promise((resolve) => {
+    let req;
+    try { req = indexedDB.open(KEEP_DB, 1); } catch { return resolve(); }
+    req.onupgradeneeded = () => req.result.createObjectStore('kv');
+    req.onerror = () => resolve();
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction('kv', mode);
+      const r = fn(tx.objectStore('kv'));
+      tx.oncomplete = () => { db.close(); resolve(r?.result); };
+      tx.onerror = tx.onabort = () => { db.close(); resolve(); };
+    };
+  }));
+}
+const cookieAttrs = () => `path=${location.pathname.replace(/[^/]*$/, '')};SameSite=Lax${location.protocol === 'https:' ? ';Secure' : ''}`;
+function keepIdentity() {
+  if (!S.code) return;
+  document.cookie = `fairplan=${S.code}.${S.me || ''};max-age=63072000;${cookieAttrs()}`;
+  keepStore('readwrite', (st) => st.put({ code: S.code, me: S.me }, 'id')).catch(() => {});
+}
+function forgetIdentity() {
+  document.cookie = `fairplan=;max-age=0;${cookieAttrs()}`;
+  return keepStore('readwrite', (st) => st.delete('id')).catch(() => {});
+}
+async function restoreIdentity() {
+  navigator.storage?.persist?.().catch(() => {});
+  if (S.code && S.me) return;
+  const m = document.cookie.match(/(?:^|; )fairplan=([A-Z0-9]{16})\.(\w*)/);
+  const kept = (await keepStore('readonly', (st) => st.get('id')).catch(() => null)) || (m && { code: m[1], me: m[2] || null });
+  if (!kept?.code || (S.code && S.code !== kept.code)) return;
+  S.code = kept.code;
+  ls.set('code', kept.code);
+  if (!S.me && kept.me) { S.me = kept.me; ls.set('me', kept.me); }
+}
+
 // ---------- Start ----------
 
 init();
 
 async function init() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  await restoreIdentity();
   try {
     S.store = await openStore();
   } catch (e) {
@@ -189,6 +232,7 @@ async function init() {
 
 function connect(code) {
   S.code = code;
+  keepIdentity();
   S.subs.forEach((u) => u());
   S.subs = [
     S.store.watchHousehold(code, (hh) => {
@@ -238,6 +282,7 @@ function ensureDays(from) {
 // Nicht neu zeichnen, während jemand in ein Feld tippt
 app.addEventListener('focusout', () => setTimeout(() => { if (S.pendingRender) render(); }, 0));
 
+let loadTimer;
 function render() {
   if (S.setup) return renderSetup();
   const a = document.activeElement;
@@ -248,6 +293,13 @@ function render() {
   S.pendingRender = false;
   if (S.hh === undefined || !S.tasksLoaded) {
     app.innerHTML = '<p class="loading">Fairplan wird geladen …</p>';
+    clearTimeout(loadTimer);
+    loadTimer = setTimeout(() => {
+      if (S.hh === undefined || !S.tasksLoaded) {
+        app.innerHTML = `<header class="top">${LOGO}</header><p>Keine Verbindung zur Datenbank. Dein Haushalt ist nicht weg, bitte prüfe das Internet.</p>
+          <div class="btnrow"><button class="btn primary" onclick="location.reload()">Erneut versuchen</button></div>`;
+      }
+    }, 15000);
     return;
   }
   if (S.hh === null) {
@@ -443,6 +495,8 @@ const paused = (w) => (w.owner === null
   ? S.hh.persons.every((p) => awayDuring(S.hh, p.id, toDay(w.start), toDay(w.end)))
   : awayDuring(S.hh, w.owner, toDay(w.start), toDay(w.end)));
 const colorOf = (id) => { const p = person(id); return p ? `var(--c-${p.color})` : 'var(--shared)'; };
+// Für Punkte und Ringe im Plan: je Darstellung gut sichtbar
+const dotOf = (id) => { const p = person(id); return p ? `var(--d-${p.color})` : 'var(--shared)'; };
 
 // ---------- Aktuell ----------
 
@@ -524,7 +578,7 @@ function viewToday() {
   ].sort((a, b) => a[0] - b[0]).map((r) => r[1]).join('');
 
   return `${card}
-    ${rules.length ? fold('rules', bonusToday ? head('Abmachungen', `+${bonusToday} Bonus`, 'bonus') : head('Abmachungen', openRules.length), `<div class="list">${openRules.map(ruleRow).join('')}</div>`, true) : ''}
+    ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} Bonus</span>` : ''}`, `<div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
     ${fold('tasks', head('Aufgaben', tasks.length), rows(tasks), true)}
     ${need.length ? fold('need', head('Bei Bedarf', need.length), rows(need, () => '')) : ''}
     ${others}
@@ -601,10 +655,10 @@ function viewPlan() {
     const owners = planned.get(ds) || new Set();
     const rings = ds < S.today || ds < S.hh.setup ? '' : [
       ...S.hh.persons.filter((p) => !isAway(p.id, ds) && ((p.days?.length ? p.days : [5]).includes(weekdayOf(ds)) || owners.has(p.id)))
-        .map((p) => `<i class="ring-dot" style="--pc:var(--c-${p.color})"></i>`),
+        .map((p) => `<i class="ring-dot" style="--pc:var(--d-${p.color})"></i>`),
       owners.has(null) ? '<i class="ring-dot" style="--pc:var(--shared)"></i>' : '',
     ].join('');
-    const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id)).map((p) => `<i style="--pc:var(--c-${p.color})"></i>`).join('') + rings;
+    const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id)).map((p) => `<i style="--pc:var(--d-${p.color})"></i>`).join('') + rings;
     const away = S.hh.persons.find((p) => isAway(p.id, ds));
     const cls = [ds === S.today ? 'today' : '', ds === sel ? 'sel' : '', hol.has(ds) ? 'holiday' : '', away ? 'away' : ''].join(' ');
     const label = asDate(ds).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -638,7 +692,7 @@ function dayDetail(sel, doneOn, holiday) {
 
   const planned = wins.map((w) => {
     const p = person(w.owner);
-    return `<div class="drow"><span class="ring" style="--pc:${colorOf(w.owner)}"></span><span class="t">${esc(w.task.title)}</span>
+    return `<div class="drow"><span class="ring" style="--pc:${dotOf(w.owner)}"></span><span class="t">${esc(w.task.title)}</span>
       <span class="who">${p ? byName(p.id) : 'Gemeinsam'}</span></div>`;
   }).join('');
   const doneRows = done.map((c) => {
@@ -650,12 +704,15 @@ function dayDetail(sel, doneOn, holiday) {
       <time>${time}</time>${c.by === S.me ? `<button class="minibtn" data-reopen="${esc(c.id)}">Rückgängig</button>` : ''}</div>`;
   }).join('');
   const awayP = S.hh.persons.filter((p) => isAway(p.id, sel));
+  const idle = sel < S.today || sel < S.hh.setup ? [] : S.hh.persons.filter((p) => !isAway(p.id, sel)
+    && (p.days?.length ? p.days : [5]).includes(weekdayOf(sel)) && !wins.some((w) => w.owner === p.id));
   const dayName = sel === S.today ? 'Heute' : WEEKDAYS_LONG[weekdayOf(sel)];
   return `<h2>${dayName}, ${asDate(sel).getDate()}. ${shortMonth(sel)}${holiday ? ` · ${esc(holiday)}` : ''}</h2>
     ${awayP.map((p) => `<div class="awaynote" style="--pc:var(--c-${p.color})">${esc(p.name)} ist abwesend</div>`).join('')}
     ${planned ? `${past ? '<p class="none">Offen geblieben</p>' : ''}<div class="tile">${planned}</div>` : ''}
     ${doneRows ? `<div class="tile">${doneRows}</div>` : ''}
-    ${planned || doneRows || awayP.length ? '' : '<p class="none">Nichts an diesem Tag.</p>'}`;
+    ${idle.length ? `<p class="none">Putztag von ${idle.map((p) => esc(p.name)).join(', ').replace(/, ([^,]*)$/, ' und $1')}, nichts geplant.</p>` : ''}
+    ${planned || doneRows || awayP.length || idle.length ? '' : '<p class="none">Nichts an diesem Tag.</p>'}`;
 }
 
 // Nächste 2 Wochen: kommende Aufgaben ohne Tägliches, Abwesenheiten in Personenfarbe
@@ -667,12 +724,12 @@ function nextTwoWeeks() {
   for (const p of S.hh.persons) {
     const a = S.hh.away?.[p.id];
     if (!a?.from || !a?.to || toDay(a.to) < first || toDay(a.from) > last) continue;
-    add(fromDay(Math.max(first, toDay(a.from))), `<li class="away"><i style="--pc:var(--c-${p.color})"></i><span class="by" data-c="${p.color}">${esc(p.name)} abwesend bis ${fmtDate(a.to)}</span></li>`);
+    add(fromDay(Math.max(first, toDay(a.from))), `<li class="away"><i style="--pc:var(--d-${p.color})"></i><span class="by" data-c="${p.color}">${esc(p.name)} abwesend bis ${fmtDate(a.to)}</span></li>`);
   }
   const wins = S.tasks.flatMap((t) => windowsBetween(t, S.hh, fromDay(first), fromDay(last)))
     .filter((w) => kindOf(w.task) !== 'daily' && toDay(w.start) >= first && !byId.has(completionId(w.task.id, w.key, w.slot)) && !paused(w))
     .sort((a, b) => kindRank(a.task) - kindRank(b.task));
-  for (const w of wins) add(w.start, `<li><i style="--pc:${colorOf(w.owner)}"></i><span>${esc(w.task.title)}</span></li>`);
+  for (const w of wins) add(w.start, `<li><i style="--pc:${dotOf(w.owner)}"></i><span>${esc(w.task.title)}</span></li>`);
   const rows = [...days.keys()].sort().map((ds) => `<div class="urow"><div class="d"><small>${WEEKDAYS[weekdayOf(ds)]}</small><b>${fmtDate(ds, false)}</b></div><ul>${days.get(ds).join('')}</ul></div>`).join('');
   return `<h2>Nächste 2 Wochen</h2>${rows ? `<div class="tile pad">${rows}</div><span class="hint">Ohne tägliche Aufgaben.</span>` : '<p class="none">Nichts geplant.</p>'}`;
 }
@@ -816,7 +873,7 @@ function viewMore() {
       ${goRow('start', 'flag', 'Start des Plans', fmtDate(hh.setup, true))}
     </div>
     <button class="logout" data-action="leave">Auf diesem Gerät abmelden</button>
-    <p class="version">fairplan · Version ${APP_VERSION}</p>`;
+    <p class="version">fairplan · Version ${APP_VERSION} · ${standalone() ? 'App' : 'Browser'}</p>`;
 }
 
 // Ein Putztag oder mehrere: das Wort passt sich an
@@ -1022,6 +1079,7 @@ async function createHousehold(withTemplate) {
   S.code = code;
   ls.set('me', 'p1'); // wer anlegt, ist Person 1
   S.me = 'p1';
+  keepIdentity();
   st.step = 'created';
   renderSetup();
 }
@@ -1078,6 +1136,7 @@ async function joinHousehold(fromLink) {
   if (!hh) { Object.assign(st, { step: 'start', error: 'Kein Haushalt mit diesem Code gefunden (oder offline).' }); return renderSetup(); }
   ls.set('code', code);
   S.code = code;
+  keepIdentity();
   // im Browser (nicht vom Home-Bildschirm) beigetreten: Hinweis, die App noch abzulegen
   if (fromLink && !standalone()) { st.step = 'joined'; return renderSetup(); }
   S.setup = null;
@@ -1301,8 +1360,8 @@ app.addEventListener('click', (e) => {
   if (!el || el.disabled) return;
   const d = el.dataset;
   if (d.view) { S.stack = []; S.view = d.view; window.scrollTo(0, 0); return render(); }
-  if (d.go) { S.stack.push(S.view); S.view = d.go; window.scrollTo(0, 0); return render(); }
-  if (el.matches('[data-back]')) { S.view = S.stack.pop() || 'mehr'; window.scrollTo(0, 0); return render(); }
+  if (d.go) { S.stack.push(S.view); S.view = d.go; history.pushState(null, ''); window.scrollTo(0, 0); return render(); }
+  if (el.matches('[data-back]')) return history.back();
   if (d.filter) { S.filter = d.filter; return render(); }
   if (d.kindFilter) { S.kindFilter = d.kindFilter; return render(); }
   if (d.awayClear) return updateHH({ away: { ...(S.hh.away || {}), [d.awayClear]: {} } });
@@ -1324,7 +1383,7 @@ app.addEventListener('click', (e) => {
     return c ? void reopen(d.reopen, c.title) : undefined;
   }
   if (d.avatar) return patchMe({ avatar: d.avatar });
-  if (d.me) { S.me = d.me; ls.set('me', d.me); return render(); }
+  if (d.me) { S.me = d.me; ls.set('me', d.me); keepIdentity(); return render(); }
   if (d.themeSet) { setTheme(d.themeSet); return render(); }
   if (d.edit !== undefined && el.matches('[data-edit]')) return openEditor(d.edit);
   if (d.personColor) {
@@ -1375,7 +1434,7 @@ app.addEventListener('click', (e) => {
     case 'leave':
       if (!confirm('Haushalt auf diesem Gerät abmelden?')) return;
       ls.set('code', null); ls.set('me', null); ls.set('accent', null);
-      location.replace(location.pathname); // ohne ?join=, sonst wäre man gleich wieder drin
+      forgetIdentity().finally(() => location.replace(location.pathname)); // ohne ?join=, sonst wäre man gleich wieder drin
   }
 });
 
@@ -1494,6 +1553,7 @@ app.addEventListener('click', (e) => { if (swallowClick) { e.preventDefault(); e
 app.addEventListener('toggle', (e) => {
   const d = e.target;
   if (d.dataset?.fold) S.open[d.dataset.fold] = d.open;
+  if (d.dataset?.fold === 'rules') ls.set('open-rules', d.open ? '1' : null);
 }, true);
 
 app.addEventListener('input', (e) => {
@@ -1542,6 +1602,8 @@ function openEditor(id) {
   </form>`;
   sheet.hidden = false;
   document.body.style.overflow = 'hidden';
+  history.pushState(null, '');
+  editorEntry = true;
   const form = $('#taskForm');
   const f = form.elements;
   // Entwurf aus dem Formular, für die Vorschau der nächsten Termine
@@ -1632,7 +1694,18 @@ function closeEditor() {
   sheet.hidden = true;
   sheet.innerHTML = '';
   document.body.style.overflow = '';
+  if (editorEntry) { editorEntry = false; skipPop = true; history.back(); }
 }
+// Zurück (Android-Taste, Browser, Pfeil oben): erst Editor schließen, dann eine Unterseite zurück
+let editorEntry = false, skipPop = false;
+window.addEventListener('popstate', () => {
+  if (skipPop) { skipPop = false; return; }
+  if (!sheet.hidden) { editorEntry = false; closeEditor(); return; }
+  if (S.setup || !S.stack.length) return;
+  S.view = S.stack.pop();
+  window.scrollTo(0, 0);
+  render();
+});
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!sheet.hidden) closeEditor();
