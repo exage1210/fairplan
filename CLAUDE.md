@@ -54,7 +54,9 @@ Etappen 1–6 gesammelt gebaut; Etappe 7 (Einrichtung neu) kommt extra. Gilt vor
 - Abhaken per Tippen oder Wischen in beide Richtungen; fremde Häkchen gesperrt; eigene zurücknehmen mit Abfrage (`reopen`), auch im Plan.
 - Laden: `ensureDays(from)` hält einen Erledigungs-Listener, Bereich wächst nur (Standard 62 Tage, Statistik ab Start des Plans), um im Gratis-Rahmen zu bleiben.
 - Profil: `persons[].avatar` letter/animal/photo, `persons[].photo` = 160-px-JPEG als Data-URL im Haushalts-Dokument. Bestehende Daten bleiben unverändert gültig.
-- Bewusst nicht gebaut: Mitteilungen und Tägliche Erinnerung (Push später), Müll/Pflanzen als Abmachungen (nur in der neuen Vorlage, Etappe 7; bestehender Plan wird nicht automatisch geändert).
+- Bewusst nicht gebaut: Mitteilungen und Tägliche Erinnerung (Push später).
+- Feinschliff v20: Einrichtung Schritt 1 nutzt dieselben Bausteine wie das Profil (`colorGrid`, `dayChips`). Vorlage: Müll rausbringen und Pflanzen gießen bei Hitze sind Abmachungen (bestehender Plan ändert sich nicht automatisch, dort per Vorschlag antippen und alte Aufgabe löschen). Plan: gefüllter Punkt = erledigt, Ring ab heute = Putztag oder geplante Aufgaben (grau = Gemeinsames). Avatar: Tier in Personenfarbe, Kreis nach Darstellung (`--av-bg`); Buchstabe bleibt dunkel auf vollem Farbkreis. Darstellung „Zart“ heißt in der Oberfläche „Farbe“ (Wert bleibt `zart`). „Putztag/Putztage“ passt sich der Anzahl an.
+- v21: Aufgaben auf Aktuell: jetzt Dranes vor „diese Woche“, darin eigene → gemeinsame → Rhythmus. Saison für Abmachungen nur über `RULE_SEASONS` in `template.js` (Pflanzen gießen bei Hitze Juni–August; kein Eingabefeld für eigene). Darstellung Auto (kein gespeichertes `fairplan.theme`): Handy dunkel → Dunkel, hell → Farbe; eigene Wahl bleibt, bis man Auto antippt.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
