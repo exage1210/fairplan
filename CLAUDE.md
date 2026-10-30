@@ -60,6 +60,9 @@ Etappen 1–6 gesammelt gebaut; Etappe 7 (Einrichtung neu) kommt extra. Gilt vor
 - v22: Wer einen Haushalt anlegt, ist automatisch Person 1 (nur Beitretende werden gefragt). Statuskarte: „Alles erledigt“ nur, wenn heute etwas Eigenes erledigt wurde, sonst „Heute ist nichts dran.“ Abmelden entfernt auch `fairplan.accent` und den `?join=`-Teil der Adresse.
 - v23: Abmachungen starten eingeklappt (Wahl pro Gerät: `fairplan.open-rules`). Punkte und Ringe im Plan über `--d-<farbe>` (hell/Farbe kräftig). Tagesdetail nennt Putztag ohne Aufgaben. Unterseiten und Editor nutzen `history`, damit die Zurück-Taste funktioniert.
 - v24: Code und Person zusätzlich in IndexedDB (`fairplan-keep`) und Cookie, `restoreIdentity` holt sie zurück, wenn localStorage leer ist (Absicherung, Ursache am iPhone noch nicht bestätigt). „Nicht gefunden“ nur noch nach Antwort vom Server, sonst nach 15 s Hinweis auf fehlende Verbindung. Versionszeile zeigt App/Browser.
+- Plan (v26): „Nächste 2 Wochen“ und Tagesdetail sortieren eigene → gemeinsame → andere, darin nach Rhythmus (`byMeFirst`).
+- Abmachungen (v27): `RULE_COMMON` immer sichtbar, `RULE_GROUPS` zum Aufklappen, `RULE_SUGGESTIONS` alle; `TEMPLATE_RULES` bleibt, was die Vorlage vorauswählt. Text = Kennung, Vorschläge nicht umformulieren. Eigene Abmachungen (v28) als Knöpfe mit ×, „+ Abmachung“ öffnet eine Eingabe, die für weitere offen bleibt (`addOwnRule`). Geplant für Etappe 7: Frage „Was gibt es bei euch?“ steuert Vorschläge und Vorlage.
+- `render` wartet, solange ein Finger aufliegt (`pointerDown`), sonst verschwindet der Knopf unter dem Finger und der Tipp geht verloren.
 - Spruch: in der App „Fairplan – der Putzplan für deinen Haushalt“, für die Werbung „Fairplan – weniger diskutieren, mehr erledigt“.
 
 ## Offen / Ideen
