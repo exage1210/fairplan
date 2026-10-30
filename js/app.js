@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.24';
+const APP_VERSION = '2.0.25';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -986,7 +986,7 @@ function renderSetup() {
   let body = '';
   if (st.step === 'start') {
     body = `<h2>Willkommen</h2>
-      <p>Ein Putzplan für deinen Haushalt. Lege einen Haushalt an oder tritt mit einem Code bei.</p>
+      <p>Der Putzplan für deinen Haushalt. Lege einen Haushalt an oder tritt mit einem Code bei.</p>
       <div class="btnrow"><button class="btn primary block" data-setup="new">Haushalt neu anlegen</button></div>
       <h2>Beitreten</h2>
       <label class="field">Haushalts-Code<input type="text" id="joinCode" class="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX"></label>
