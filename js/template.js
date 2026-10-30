@@ -22,6 +22,18 @@ export const TEMPLATE_RULES = [
   'Pflanzen gießen bei Hitze',
 ];
 
+// Vorschläge zum Auswählen: die häufigsten immer sichtbar, der Rest nach Bereichen zum Aufklappen.
+// Kennung einer Abmachung ist ihr Text, Vorschläge also nicht umformulieren.
+export const RULE_COMMON = ['Geschirr und Küche (Herd und Flächen)', 'Kochen', 'Einkaufen', 'Kurz aufräumen', 'Müll rausbringen', 'Betten machen'];
+export const RULE_GROUPS = [
+  ['kueche', 'Küche', ['Geschirrspüler ein- und ausräumen', 'Frühstück herrichten', 'Tisch decken']],
+  ['haushalt', 'Haushalt', ['Wäsche aufhängen', 'Post holen', 'Saugroboter leeren']],
+  ['kind', 'Kind', ['Kind ins Bett bringen', 'Kind baden', 'Jause herrichten', 'Spielzeug wegräumen']],
+  ['tier', 'Haustier', ['Haustier füttern', 'Gassi gehen', 'Katzenklo reinigen']],
+  ['pflanzen', 'Pflanzen und Garten', ['Pflanzen gießen bei Hitze', 'Garten gießen']],
+];
+export const RULE_SUGGESTIONS = [...RULE_COMMON, ...RULE_GROUPS.flatMap((g) => g[2])];
+
 // Abmachungen, die nur in einer Saison erscheinen (Monate)
 export const RULE_SEASONS = { 'Pflanzen gießen bei Hitze': { from: 6, to: 8 } };
 

@@ -4,7 +4,7 @@ import {
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
-import { TEMPLATE, TEMPLATE_RULES, RULE_SEASONS } from './template.js';
+import { TEMPLATE, TEMPLATE_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS } from './template.js';
 
 // ---------- Konstanten & Hilfen ----------
 
@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.25';
+const APP_VERSION = '2.0.28';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -123,6 +123,7 @@ const S = {
   planDate: null, // Datum im sichtbaren Plan-Zeitraum, null = heute
   calDay: null, // gewählter Tag im Plan, null = heute
   statMode: 'week',
+  addRule: false, // Eingabe „+ Abmachung“ offen
   cheered: true, // beim Öffnen nicht einblenden, nur wenn gerade alles erledigt wurde
   backup: null, // fertig geladene Sicherung, wartet auf „Datei sichern“
   today: localToday(),
@@ -282,8 +283,19 @@ function ensureDays(from) {
 // Nicht neu zeichnen, während jemand in ein Feld tippt
 app.addEventListener('focusout', () => setTimeout(() => { if (S.pendingRender) render(); }, 0));
 
+// Während ein Finger aufliegt nicht neu zeichnen: sonst verschwindet der Knopf unter dem Finger und der Tipp geht verloren
+let pointerDown = false;
+document.addEventListener('pointerdown', () => { pointerDown = true; }, true);
+const pointerEnd = () => {
+  pointerDown = false;
+  setTimeout(() => { if (S.pendingRender && !pointerDown) render(); }, 50); // nach dem Klick
+};
+document.addEventListener('pointerup', pointerEnd, true);
+document.addEventListener('pointercancel', pointerEnd, true);
+
 let loadTimer;
 function render() {
+  if (pointerDown) { S.pendingRender = true; return; }
   if (S.setup) return renderSetup();
   const a = document.activeElement;
   if (a && app.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.type !== 'checkbox') {
@@ -447,9 +459,15 @@ function nowRow(it, sub = '') {
 }
 
 // Vorgeschlagene Abmachungen als Knöpfe zum An-/Abwählen
-const ruleChips = (picked, attr) => `<div class="filters">${TEMPLATE_RULES.map((r) =>
-  `<button ${attr}="${esc(r)}" aria-pressed="${picked.includes(r)}">${esc(r)}</button>`).join('')}</div>`;
-const ownRules = () => (S.hh.rules || []).filter((r) => !TEMPLATE_RULES.includes(r));
+const ruleChips = (picked, attr) => {
+  const chips = (list) => `<div class="filters">${list.map((r) =>
+    `<button ${attr}="${esc(r)}" aria-pressed="${picked.includes(r)}">${esc(r)}</button>`).join('')}</div>`;
+  return chips(RULE_COMMON) + RULE_GROUPS.map(([key, name, list]) => {
+    const n = list.filter((r) => picked.includes(r)).length;
+    return fold(`rg-${key}`, `${name}${n ? ` <span class="count bonus">${n}</span>` : ''}`, chips(list));
+  }).join('');
+};
+const ownRules = () => (S.hh.rules || []).filter((r) => !RULE_SUGGESTIONS.includes(r));
 const toggled = (list, x) => (list.includes(x) ? list.filter((y) => y !== x) : [...list, x]);
 
 // Abmachung als Zeile: wer zuerst erledigt, hakt für alle ab; Häkchen anderer sind gesperrt
@@ -680,6 +698,10 @@ function viewPlan() {
     ${nextTwoWeeks()}`;
 }
 
+// Im Plan: eigene zuerst, dann gemeinsame, dann die der anderen; innerhalb nach Rhythmus
+const meRank = (w) => (w.owner === S.me ? 0 : w.owner === null ? 1 : 2 + S.hh.persons.findIndex((p) => p.id === w.owner));
+const byMeFirst = (a, b) => meRank(a) - meRank(b) || kindRank(a.task) - kindRank(b.task);
+
 // Tagesdetail: Erledigtes (wer, was, wann; eigene rückgängig) und Geplantes bzw. offen Gebliebenes
 function dayDetail(sel, doneOn, holiday) {
   const past = sel < S.today;
@@ -687,7 +709,7 @@ function dayDetail(sel, doneOn, holiday) {
   const wins = S.tasks.flatMap((t) => windowsBetween(t, S.hh, sel, sel)).filter((w) => kindOf(w.task) !== 'daily'
     && !byId.has(completionId(w.task.id, w.key, w.slot)) && !paused(w)
     && (past ? w.end === sel && w.start >= S.dayFrom : sel === S.today ? w.start <= sel : w.start === sel));
-  wins.sort((a, b) => kindRank(a.task) - kindRank(b.task));
+  wins.sort(byMeFirst);
   const done = (doneOn.get(sel) || []).slice().sort((a, b) => a.at.localeCompare(b.at));
 
   const planned = wins.map((w) => {
@@ -728,7 +750,7 @@ function nextTwoWeeks() {
   }
   const wins = S.tasks.flatMap((t) => windowsBetween(t, S.hh, fromDay(first), fromDay(last)))
     .filter((w) => kindOf(w.task) !== 'daily' && toDay(w.start) >= first && !byId.has(completionId(w.task.id, w.key, w.slot)) && !paused(w))
-    .sort((a, b) => kindRank(a.task) - kindRank(b.task));
+    .sort(byMeFirst);
   for (const w of wins) add(w.start, `<li><i style="--pc:${dotOf(w.owner)}"></i><span>${esc(w.task.title)}</span></li>`);
   const rows = [...days.keys()].sort().map((ds) => `<div class="urow"><div class="d"><small>${WEEKDAYS[weekdayOf(ds)]}</small><b>${fmtDate(ds, false)}</b></div><ul>${days.get(ds).join('')}</ul></div>`).join('');
   return `<h2>Nächste 2 Wochen</h2>${rows ? `<div class="tile pad">${rows}</div><span class="hint">Ohne tägliche Aufgaben.</span>` : '<p class="none">Nichts geplant.</p>'}`;
@@ -936,9 +958,16 @@ function viewAway() {
   return `${rows}<span class="hint">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn beide weg sind.</span>`;
 }
 
-const viewRules = () => `<h2>Vorschläge</h2>${ruleChips(S.hh.rules || [], 'data-rule-suggest')}
-  <label class="field">Eigene Abmachungen (eine pro Zeile)<textarea data-rules rows="5" placeholder="Pflanzen am Fensterbrett gießen&#10;Post reinholen">${esc(ownRules().join('\n'))}</textarea></label>
+const viewRules = () => {
+  const own = ownRules();
+  return `<h2>Vorschläge</h2>${ruleChips(S.hh.rules || [], 'data-rule-suggest')}
+  <h2>Eigene Abmachungen</h2>
+  ${own.length ? `<div class="filters own-rules">${own.map((r) => `<button data-rule-remove="${esc(r)}" aria-pressed="true" aria-label="${esc(r)} entfernen">${esc(r)}<span aria-hidden="true">×</span></button>`).join('')}</div>` : ''}
+  ${S.addRule ? `<form id="ruleForm" class="addrule"><input type="text" id="newRule" maxlength="120" enterkeyhint="done" autocomplete="off" aria-label="Neue Abmachung" placeholder="z. B. Pflanzen am Fensterbrett gießen">
+    <div class="btnrow"><button type="submit" class="btn primary">Hinzufügen</button><button type="button" class="btn" data-action="rule-done">Fertig</button></div></form>`
+    : `<button class="addrow" data-action="rule-add">${icon('plus', 18)}Abmachung</button>`}
   <span class="hint">Selbstverständliches für jeden Tag: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für alle ab. Nie offen, zählt als Bonus. „Pflanzen gießen bei Hitze“ erscheint nur von Juni bis August.</span>`;
+};
 
 const viewBackup = () => `<p class="small" style="margin-top:18px">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt Aufgaben und Haushalts-Einstellungen durch die aus der Datei, der Verlauf bleibt und wird ergänzt.</p>
   <div class="btnrow"><button class="btn" data-action="export">Daten exportieren</button><button class="btn" data-action="import">Daten importieren</button></div>
@@ -963,7 +992,7 @@ function startSetup(reset = false) {
   S.setup = reset
     ? { step: 'persons', reset: true, persons: S.hh.persons.map((p) => ({ name: p.name, color: p.color, days: p.days?.length ? p.days : [5] })),
       shared: S.hh.sharedDays?.length ? S.hh.sharedDays : [5], start: S.today,
-      rules: (S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), tasks: [], error: '' }
+      rules: (S.hh.rules || []).filter((r) => RULE_SUGGESTIONS.includes(r)), tasks: [], error: '' }
     : { step: 'start', persons: [{ name: '', color: 'violett', days: [5] }, { name: '', color: 'gruen', days: [5] }],
       shared: [5], start: S.today, rules: [], tasks: [], error: '' };
   renderSetup();
@@ -1053,7 +1082,7 @@ function setupTasks(withTemplate) {
   return withTemplate ? spreadPositions(S.setup.tasks).map((t, i) => ({ ...t, id: newId(), created: S.setup.start, order: i })) : [];
 }
 const setupPersons = () => S.setup.persons.map((p, i) => ({ id: `p${i + 1}`, name: p.name.trim(), color: p.color, days: p.days }));
-const setupRules = (withTemplate) => (withTemplate ? TEMPLATE_RULES : TEMPLATE_RULES.filter((r) => S.setup.rules.includes(r)));
+const setupRules = (withTemplate) => RULE_SUGGESTIONS.filter((r) => S.setup.rules.includes(r) || (withTemplate && TEMPLATE_RULES.includes(r)));
 
 async function createHousehold(withTemplate) {
   const st = S.setup;
@@ -1361,7 +1390,7 @@ app.addEventListener('click', (e) => {
   const d = el.dataset;
   if (d.view) { S.stack = []; S.view = d.view; window.scrollTo(0, 0); return render(); }
   if (d.go) { S.stack.push(S.view); S.view = d.go; history.pushState(null, ''); window.scrollTo(0, 0); return render(); }
-  if (el.matches('[data-back]')) return history.back();
+  if (el.matches('[data-back]')) { S.addRule = false; return history.back(); }
   if (d.filter) { S.filter = d.filter; return render(); }
   if (d.kindFilter) { S.kindFilter = d.kindFilter; return render(); }
   if (d.awayClear) return updateHH({ away: { ...(S.hh.away || {}), [d.awayClear]: {} } });
@@ -1406,11 +1435,18 @@ app.addEventListener('click', (e) => {
   }
   if (d.ruleSuggest) {
     // vorgeschlagene Abmachungen in Vorschlagsreihenfolge vorne, eigene dahinter
-    const picked = toggled((S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), d.ruleSuggest);
-    return updateHH({ rules: [...TEMPLATE_RULES.filter((r) => picked.includes(r)), ...ownRules()] });
+    const picked = toggled(S.hh.rules || [], d.ruleSuggest);
+    return updateHH({ rules: [...RULE_SUGGESTIONS.filter((r) => picked.includes(r)), ...ownRules()] });
+  }
+  if (d.ruleRemove) {
+    const before = S.hh.rules || [];
+    updateHH({ rules: before.filter((r) => r !== d.ruleRemove) });
+    return snack('Abmachung entfernt.', () => updateHH({ rules: before }));
   }
   if (d.setup) return setupAction(d.setup);
   switch (d.action) {
+    case 'rule-add': S.addRule = true; render(); $('#newRule')?.focus(); return;
+    case 'rule-done': addOwnRule(false); S.addRule = false; document.activeElement?.blur(); return render();
     case 'copy': return copyCode();
     case 'copy-link':
       navigator.clipboard?.writeText(inviteLink()).then(() => snack('Link kopiert.'), () => snack(inviteLink()));
@@ -1461,6 +1497,32 @@ function setupAction(a) {
   if (st.error) $('#app .ov')?.scrollIntoView({ block: 'center' });
 }
 
+// Eigene Abmachung hinzufügen; danach bleibt die Eingabe offen für die nächste
+function addOwnRule(again = true) {
+  const input = $('#newRule');
+  const text = input?.value.trim();
+  if (text) {
+    const rules = S.hh.rules || [];
+    if (rules.includes(text)) snack('Diese Abmachung gibt es schon.');
+    else if (rules.length >= 50) snack('Mehr als 50 Abmachungen gehen nicht.');
+    else {
+      const picked = [...rules, text];
+      const next = [...RULE_SUGGESTIONS.filter((r) => picked.includes(r)), ...picked.filter((r) => !RULE_SUGGESTIONS.includes(r))];
+      S.hh = { ...S.hh, rules: next }; // gleich anzeigen, auch solange das Feld den Fokus hat
+      updateHH({ rules: next });
+    }
+  }
+  if (!again) return;
+  input?.blur();
+  render();
+  $('#newRule')?.focus();
+}
+app.addEventListener('submit', (e) => {
+  if (e.target.id !== 'ruleForm') return;
+  e.preventDefault();
+  addOwnRule();
+});
+
 app.addEventListener('change', (e) => {
   const el = e.target;
   const d = el.dataset;
@@ -1499,11 +1561,6 @@ app.addEventListener('change', (e) => {
     if (cur.to && !cur.from) cur.from = cur.to;
     if (cur.from && cur.to && cur.to < cur.from) [cur.from, cur.to] = [cur.to, cur.from];
     return updateHH({ away: { ...(S.hh.away || {}), [id]: cur } });
-  }
-  if (d.rules !== undefined) {
-    const own = el.value.split('\n').map((r) => r.trim()).filter((r) => r && !TEMPLATE_RULES.includes(r));
-    updateHH({ rules: [...(S.hh.rules || []).filter((r) => TEMPLATE_RULES.includes(r)), ...own].slice(0, 50) });
-    return snack('Abmachungen gespeichert.');
   }
 });
 
@@ -1702,6 +1759,7 @@ window.addEventListener('popstate', () => {
   if (skipPop) { skipPop = false; return; }
   if (!sheet.hidden) { editorEntry = false; closeEditor(); return; }
   if (S.setup || !S.stack.length) return;
+  document.activeElement?.blur(); // sonst bleibt die Seite stehen, solange ein Feld den Fokus hat
   S.view = S.stack.pop();
   window.scrollTo(0, 0);
   render();
