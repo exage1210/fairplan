@@ -45,6 +45,17 @@ Putzplan-PWA für einen Haushalt mit 2 Personen. Version 1 ist fertig und in Ben
 - Bewusst später (Merkliste): Joker, Urlaubsausgleich, Pakettausch (Idee: als Belohnung).
 - Nachträglich ergänzt: Bügeln (wöchentlich, A), Einkaufen (wöchentlich, B), Auto putzen und Lüftungsfilter im Bad (halbjährlich, gemeinsam).
 
+## Neues Design (30.10.2026, v19, Vault-Notizen „Umsetzung 2026-10-30“ und „Design 2026-10-30“)
+Etappen 1–6 gesammelt gebaut; Etappe 7 (Einrichtung neu) kommt extra. Gilt vor älteren Einträgen oben, wo sie sich widersprechen.
+- Darstellung: `data-theme` dark/light/zart + `data-accent` = eigene Personenfarbe (localStorage `fairplan.accent`), alles über CSS-Variablen in `styles.css`. Schrift Inter über Google Fonts, sonst Systemschrift.
+- Navigation: Aktuell · Plan · Statistik · Mehr (`S.view`); Unterseiten in `PAGES`, Rückweg über `S.stack`. „Alle“ ist jetzt Mehr › Aufgabenliste, „Ich bin“ entfällt, Geplant-Schalter und Monatsbilanz entfallen.
+- Aktuell: Statuskarte (heute x/y; Balken = Woche Mo–So inkl. Vergessenem über `dueBetween`, nur eigene Erledigungen füllen ihn; Abmachungen = „+N Bonus“ daneben). Abschnitte Abmachungen · Aufgaben · Bei Bedarf · andere Person (Vertretung, eingeklappt) · Erledigt. Aufgaben enthält auch, was diese Woche noch kommt, damit man es vorher abhaken kann. Sortierung eigene → gemeinsame → Rhythmus.
+- Serie (`streaks`): Tage in Folge mit mindestens einer eigenen Erledigung (auch Abmachung); heute darf fehlen, Abwesenheit unterbricht nicht.
+- Abhaken per Tippen oder Wischen in beide Richtungen; fremde Häkchen gesperrt; eigene zurücknehmen mit Abfrage (`reopen`), auch im Plan.
+- Laden: `ensureDays(from)` hält einen Erledigungs-Listener, Bereich wächst nur (Standard 62 Tage, Statistik ab Start des Plans), um im Gratis-Rahmen zu bleiben.
+- Profil: `persons[].avatar` letter/animal/photo, `persons[].photo` = 160-px-JPEG als Data-URL im Haushalts-Dokument. Bestehende Daten bleiben unverändert gültig.
+- Bewusst nicht gebaut: Mitteilungen und Tägliche Erinnerung (Push später), Müll/Pflanzen als Abmachungen (nur in der neuen Vorlage, Etappe 7; bestehender Plan wird nicht automatisch geändert).
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.
