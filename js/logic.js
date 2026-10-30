@@ -447,3 +447,36 @@ export function windowsBetween(task, ctx, fromStr, toStr) {
   }
   return out;
 }
+
+// ---------- Fortschritt & Serie ----------
+
+// Aufgaben mit Termin im Bereich [fromStr, toStr], für die `me` zuständig ist (eigene und gemeinsame).
+// Was jemand anderer erledigt hat, fällt heraus; Pausiertes ebenso, solange es nicht erledigt ist.
+// Liefert [{ task, slot, owner, key, start, end, done }]; done = eigene Erledigung oder null.
+export function dueBetween(tasks, ctx, fromStr, toStr, doneById, me) {
+  const out = [];
+  for (const task of tasks) {
+    for (const w of windowsBetween(task, ctx, fromStr, toStr)) {
+      if (w.start < fromStr || (w.owner !== me && w.owner !== null)) continue;
+      const c = doneById.get(completionId(task.id, w.key, w.slot)) || null;
+      if (c && c.by !== me) continue;
+      if (!c && paused(ctx, w.owner, toDay(w.start), toDay(w.end))) continue;
+      out.push({ ...w, done: c });
+    }
+  }
+  return out;
+}
+
+// Serie: Tage in Folge mit mindestens einer eigenen Erledigung. Heute darf noch fehlen,
+// Abwesenheit unterbricht nicht. days: Liste von 'YYYY-MM-DD'.
+export function streaks(days, todayStr, isAway = () => false) {
+  const set = new Set(days);
+  if (!set.size) return { current: 0, longest: 0 };
+  const today = toDay(todayStr);
+  let run = 0, longest = 0;
+  for (let d = Math.min(...[...set].map(toDay)); d <= today; d++) {
+    if (set.has(fromDay(d))) { run++; if (run > longest) longest = run; }
+    else if (d !== today && !isAway(fromDay(d))) run = 0;
+  }
+  return { current: run, longest };
+}

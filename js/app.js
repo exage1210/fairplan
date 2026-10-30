@@ -1,7 +1,7 @@
 import {
   KINDS, PRESETS, kindOf, evaluate, relevantKeys, completionId,
   localToday, toDay, fromDay, windowsBetween, awayDuring,
-  monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays,
+  monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { TEMPLATE, TEMPLATE_RULES } from './template.js';
@@ -31,7 +31,49 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
+const APP_VERSION = '2.0';
 const LOGO = '<h1 class="logo">fairplan</h1>';
+const ICON_PATHS = {
+  home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
+  plan: 'M6 5h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zM3 10h18M8 3v4M16 3v4',
+  stats: 'M5 20V12M12 20V5M19 20v-9',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+  back: 'M15 6l-6 6 6 6',
+  chevron: 'M9 6l6 6-6 6',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
+  plus: 'M12 5v14M5 12h14',
+  users: 'M12.5 8a3.5 3.5 0 1 1-7 0a3.5 3.5 0 1 1 7 0zM2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6',
+  away: 'M3 19h18M5 19c0-6 3-10 7-10s7 4 7 10M12 9V5M9.5 5h5',
+  list: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01',
+  star: 'M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z',
+  refresh: 'M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7',
+  badge: 'M6 6h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3zM21.5 6a3.5 3.5 0 1 1-7 0a3.5 3.5 0 1 1 7 0z',
+  vibrate: 'M10 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM4 9v6M20 9v6',
+  moon: 'M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z',
+  qr: 'M4.5 3h4A1.5 1.5 0 0 1 10 4.5v4A1.5 1.5 0 0 1 8.5 10h-4A1.5 1.5 0 0 1 3 8.5v-4A1.5 1.5 0 0 1 4.5 3zM15.5 3h4A1.5 1.5 0 0 1 21 4.5v4a1.5 1.5 0 0 1-1.5 1.5h-4A1.5 1.5 0 0 1 14 8.5v-4A1.5 1.5 0 0 1 15.5 3zM4.5 14h4a1.5 1.5 0 0 1 1.5 1.5v4A1.5 1.5 0 0 1 8.5 21h-4A1.5 1.5 0 0 1 3 19.5v-4A1.5 1.5 0 0 1 4.5 14zM14 14h3v3M21 14v.01M14 21h3M21 17v4',
+  db: 'M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  flag: 'M5 21V4M5 4h11l-2 4 2 4H5',
+  camera: 'M4 8h3l2-3h6l2 3h3v11H4zM15.5 13a3.5 3.5 0 1 1-7 0a3.5 3.5 0 1 1 7 0z',
+};
+const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON_PATHS[name]}"></path></svg>`;
+// Tier je Personenfarbe
+const ANIMALS = {
+  blau: { name: 'Wal', fill: 'M3 13.5C3 10 6.5 8.5 10.5 8.5c3.8 0 6 1.7 7.2 3.6L21.5 9.5V16l-3.6-1.6C16.6 16.6 14 18 10.5 18 6 18 3 16.5 3 13.5z', stroke: 'M10.5 7.5V5M8 4.6c1 .1 1.8.6 2.5 1.4.7-.8 1.5-1.3 2.5-1.4', eyes: 'M6 12.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
+  rosa: { name: 'Flamingo', fill: 'M9.6 5.2a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0zM10.2 5.6L3.8 8.4l6.8-1.1z', stroke: 'M14.2 5.6c3 .6 3.4 4 1 6.6-2.4 2.6-3.8 4.6-3.4 8.3', eyes: 'M11.6 4.8a.75 .75 0 1 0 1.5 0a.75 .75 0 1 0-1.5 0z', detail: '' },
+  gelb: { name: 'Küken', fill: 'M5 14.2a7 7 0 1 0 14 0a7 7 0 1 0-14 0z', stroke: 'M12 7.2V4.6c0-1.2 1.8-1.2 1.8 0', eyes: 'M8.9 12.7a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM13.3 12.7a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM10.8 15h2.4L12 16.9z', detail: '' },
+  gruen: { name: 'Frosch', fill: 'M3 15.2c0-3.3 3.6-5.4 9-5.4s9 2.1 9 5.4-3.6 5-9 5-9-1.7-9-5zM4.8 8.6a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0zM13.6 8.6a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0z', stroke: '', eyes: 'M6.5 8.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0zM15.3 8.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0z', detail: 'M9 15.6c1.8 1.3 4.2 1.3 6 0' },
+  violett: { name: 'Qualle', fill: 'M5 12.5a7 7 0 0 1 14 0z', stroke: 'M7.6 15c-.7 1.6.7 2.5 0 4.2M10.5 15c-.7 1.6.7 2.6 0 4.6M13.5 15c-.7 1.6.7 2.6 0 4.6M16.4 15c-.7 1.6.7 2.5 0 4.2', eyes: 'M9.4 10a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM12.8 10a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0z', detail: '' },
+  orange: { name: 'Fuchs', fill: 'M3.8 4.5l5.2 4h6l5.2-4-.6 9.4L12 20.8 4.4 13.9z', stroke: '', eyes: 'M8.6 12.2a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM13.6 12.2a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM11 16.4a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
+};
+const animalSvg = (color) => {
+  const a = ANIMALS[color] || ANIMALS.violett;
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${a.fill}" fill="currentColor"></path>${a.stroke ? `<path d="${a.stroke}" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path>` : ''}<path d="${a.eyes}" style="fill:var(--eye,var(--pc,#fff))"></path>${a.detail ? `<path d="${a.detail}" fill="none" stroke-width="1.4" stroke-linecap="round" style="stroke:var(--eye,var(--pc,#fff))"></path>` : ''}</svg>`;
+};
+const initial = (p) => (p.name || '?').trim().charAt(0).toUpperCase() || '?';
+const avatar = (p, size = '') => {
+  const inner = p.avatar === 'photo' && p.photo ? `<img src="${esc(p.photo)}" alt="">` : p.avatar === 'animal' ? animalSvg(p.color) : esc(initial(p));
+  return `<span class="av ${size}" style="--pc:var(--c-${p.color})">${inner}</span>`;
+};
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const $ = (sel, root = document) => root.querySelector(sel);
 const ls = {
@@ -75,9 +117,12 @@ const S = {
   view: 'heute',
   filter: 'all',
   kindFilter: 'all',
-  calMonth: null, // 'YYYY-MM', null = aktueller Monat
-  calDay: null, // Tag im offenen Panel, null = Panel zu
-  panelAnim: false, // Panel beim Öffnen einmal hereinfahren lassen
+  stack: [], // Unterseiten: woher man gekommen ist
+  planMode: 'week',
+  planDate: null, // Datum im sichtbaren Plan-Zeitraum, null = heute
+  calDay: null, // gewählter Tag im Plan, null = heute
+  statMode: 'week',
+  cheered: true, // beim Öffnen nicht einblenden, nur wenn gerade alles erledigt wurde
   backup: null, // fertig geladene Sicherung, wartet auf „Datei sichern“
   today: localToday(),
   hh: undefined, // undefined = lädt, null = nicht gefunden
@@ -88,8 +133,8 @@ const S = {
   subs: [],
   compSub: null,
   compSig: '',
-  daySub: null, // Erledigungen im Kalenderzeitraum
-  daySig: '',
+  daySub: null, // Erledigungen ab dayFrom (für Karte, Plan, Statistik)
+  dayFrom: null,
   dayComps: [],
   open: {}, // aufgeklappte Bereiche (details) über Neuzeichnen hinweg
   pendingRender: false,
@@ -176,15 +221,13 @@ function refreshCompletions() {
   S.compSub = S.store.watchCompletions(S.code, keys, (m) => { S.comps = m; render(); });
 }
 
-// Erledigungen für den sichtbaren Kalenderzeitraum laden; null = abmelden
-function watchDays(range) {
-  const sig = range ? range.join('|') : '';
-  if (sig === S.daySig) return;
-  S.daySig = sig;
+// Erledigungen ab einem Tag laden; der Bereich wächst nur (spart Lesezugriffe).
+// Standard 62 Tage für Serie und Woche; Plan und Statistik holen bei Bedarf mehr.
+function ensureDays(from) {
+  if (S.dayFrom && S.dayFrom <= from) return;
+  S.dayFrom = from;
   S.daySub?.();
-  S.daySub = null;
-  S.dayComps = [];
-  if (range) S.daySub = S.store.watchDays(S.code, range[0], range[1], (list) => { S.dayComps = list.filter((c) => c.step == null); render(); });
+  S.daySub = S.store.watchDays(S.code, from, '9999-12-31', (list) => { S.dayComps = list.filter((c) => c.step == null); render(); });
 }
 
 // ---------- Rendern ----------
@@ -212,18 +255,53 @@ function render() {
   }
   if (!person(S.me)) return renderWhoAmI();
 
-  const views = { heute: viewToday, alle: viewAll, kalender: viewCalendar, einstellungen: viewSettings };
-  watchDays(S.view === 'kalender' ? calRange() : null);
-  const tab = S.view;
-  const tabs = [['heute', 'Aktuell'], ['alle', 'Alle'], ['kalender', 'Kalender'], ['einstellungen', 'Optionen']]
-    .map(([v, l]) => `<button data-view="${v}" ${tab === v ? 'aria-current="page"' : ''}>${l}</button>`).join('');
+  syncAccent();
+  const recent = fromDay(toDay(S.today) - 62);
+  const year = `${S.today.slice(0, 4)}-01-01`;
+  const need = S.view === 'statistik' ? [S.hh.setup, fromDay(toDay(year) - 366), fromDay(toDay(S.today) - 40)].sort()[0]
+    : S.view === 'plan' ? [recent, planRange()[0]].sort()[0] : recent;
+  ensureDays(need);
+
+  const page = PAGES[S.view];
   const scroll = window.scrollY;
-  app.innerHTML = `<header class="top">${LOGO}</header>
-    ${views[S.view]()}
-    <nav class="tabs">${tabs}</nav>`;
+  if (page) {
+    app.innerHTML = `<header class="top subtop"><button class="icobtn" data-back aria-label="Zurück">${icon('back', 22)}</button><h1>${page[0]}</h1>
+      ${S.view === 'profil' ? '<button class="textbtn" data-back>Fertig</button>' : ''}</header>${page[1]()}`;
+  } else {
+    const me = person(S.me);
+    const tabs = TABS.map(([v, l, ic]) => `<button data-view="${v}" ${S.view === v ? 'aria-current="page"' : ''}>${icon(ic)}${l}</button>`).join('');
+    app.innerHTML = `<header class="top">${LOGO}<button class="me" data-go="profil" aria-label="Profil öffnen">${avatar(me)}</button></header>
+      ${MAIN[S.view]()}
+      <nav class="tabs">${tabs}</nav>`;
+  }
   window.scrollTo(0, scroll);
   fillQr();
   updateBadge();
+}
+
+const TABS = [['heute', 'Aktuell', 'home'], ['plan', 'Plan', 'plan'], ['statistik', 'Statistik', 'stats'], ['mehr', 'Mehr', 'more']];
+const MAIN = { heute: () => viewToday(), plan: () => viewPlan(), statistik: () => viewStats(), mehr: () => viewMore() };
+const PAGES = {
+  profil: ['Profil', () => viewProfile()],
+  haushalt: ['Haushalt', () => viewHousehold()],
+  code: ['Haushalts-Code', () => viewCode()],
+  aufgaben: ['Aufgabenliste', () => viewTasks()],
+  abmachungen: ['Abmachungen', () => viewRules()],
+  putztag: ['Gemeinsamer Putztag', () => viewSharedDay()],
+  abwesenheit: ['Abwesenheit', () => viewAway()],
+  backup: ['Backup', () => viewBackup()],
+  start: ['Start des Plans', () => viewStart()],
+};
+
+// Akzent = eigene Personenfarbe; Statusleiste passend zum Hintergrund
+function syncAccent() {
+  const c = person(S.me)?.color;
+  const root = document.documentElement;
+  if (c && root.dataset.accent !== c) {
+    root.dataset.accent = c;
+    ls.set('accent', c);
+  }
+  $('meta[name="theme-color"]').content = getComputedStyle(root).getPropertyValue('--bg').trim();
 }
 
 function allItems() {
@@ -260,17 +338,18 @@ function statusText(it) {
 
 // lead: was vor dem Status steht – 'owner' (Zuständigkeit), 'shared' (nur „Gemeinsam“) oder 'interval'
 function itemRow(it, { lead = 'interval' } = {}) {
-  const p = person(it.owner);
   const active = ['due', 'overdue', 'upcoming', 'done', 'need'].includes(it.status);
   const first = lead === 'owner' ? ownerText(it) : lead === 'shared' ? (it.owner === null ? 'Gemeinsam' : '') : intervalLabel(it.task);
   const meta = [first, statusText(it), lead === 'owner' && it.task.min ? `${it.task.min} Min` : ''].filter(Boolean).join(' · ');
-  const cls = [it.status, active ? '' : 'inactive'].join(' ');
-  return `<div class="item ${cls}" style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
+  const done = it.status === 'done';
+  const locked = done && it.completion?.by !== S.me;
+  const cls = [it.status, active ? '' : 'inactive', active && !locked ? '' : 'off'].join(' ');
+  return `<div class="item ${cls}" style="--pc:${done ? colorOf(it.completion?.by) : 'var(--accent)'}">
     <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(it.task.id)}" data-slot="${esc(it.slot ?? '')}"
-      ${it.status === 'done' ? 'checked' : ''} ${active ? '' : 'disabled'} aria-label="${esc(it.task.title)} erledigt"><span class="box"></span></label>
-    <div class="body"><div class="title">${esc(it.task.title)}</div>
+      ${done ? 'checked' : ''} ${active && !locked ? '' : 'disabled'} aria-label="${esc(it.task.title)} erledigt"><span class="box"></span></label>
+    <div class="body"><button class="body-btn" data-edit="${esc(it.task.id)}"><div class="title">${esc(it.task.title)}</div>
       ${it.task.note ? `<div class="note">${esc(it.task.note)}</div>` : ''}
-      ${meta ? `<div class="meta">${meta}</div>` : ''}</div>
+      ${meta ? `<div class="meta">${meta}</div>` : ''}</button></div>
   </div>`;
 }
 
@@ -286,26 +365,31 @@ function whenText(it) {
   return '';
 }
 
-// Zeile für „Aktuell“: Intervall klein rechts, Zusatzzeile nur für Hinweis oder Termin.
-// Offene Zeilen lassen sich nach rechts wischen (= abhaken).
+// Kachel mit Wisch-Hintergrund: Wischen in beide Richtungen, färbt in der Personenfarbe.
+// Fremde Häkchen (locked) lassen sich weder antippen noch wischen.
+const swipeRow = ({ done, locked, off, by, check, body }) => `<div class="swipe">
+    <div class="swipe-bg ${done ? 'undo' : ''}">${icon('check', 20)}<span>${done ? 'Wieder öffnen' : 'Erledigt'}</span></div>
+    <div class="item ${done ? 'done' : ''} ${locked || off ? 'off' : ''}" ${locked || off ? '' : 'data-swipe'} style="--pc:${done ? colorOf(by) : 'var(--accent)'}">
+      <label class="check">${check}<span class="box"></span></label>${body}</div>
+  </div>`;
+
+// Zeile für „Aktuell“: Intervall klein rechts, Zusatzzeile für Hinweis, Termin oder „Gemeinsam“
 function nowRow(it, sub = '') {
-  const p = person(it.owner);
   const t = it.task, k = kindOf(t);
   const iv = k === 'custom' ? `alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : SHORT_KIND[k];
   const done = it.status === 'done';
+  const by = it.completion?.by;
+  const locked = done && by !== S.me;
   const off = !it.key; // nächster Termin liegt in einer späteren Periode → noch nicht abhakbar
-  const extra = [t.note ? esc(t.note) : '', sub].filter(Boolean).join(' · ');
-  return `<div class="item ${done ? 'done' : ''}" ${done || off ? '' : 'data-swipe'} style="--pc:${p ? `var(--c-${p.color})` : 'var(--shared)'}">
-    <label class="check"><input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}"
-      ${done ? 'checked' : ''} ${off ? 'disabled' : ''} aria-label="${esc(t.title)} erledigt"><span class="box"></span></label>
-    <div class="body"><div class="head"><span class="title">${esc(t.title)}</span><span class="kind">${iv}</span></div>
-      ${extra ? `<div class="meta">${extra}</div>` : ''}${stepsBlock(it)}</div>
-  </div>`;
+  const extra = [it.owner === null && !done ? 'Gemeinsam' : '', t.note ? esc(t.note) : '', sub].filter(Boolean).join(' · ');
+  return swipeRow({
+    done, locked, off, by,
+    check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}"
+      ${done ? 'checked' : ''} ${off || locked ? 'disabled' : ''} aria-label="${esc(t.title)} erledigt">`,
+    body: `<div class="body"><div class="head"><span class="title">${esc(t.title)}</span><span class="kind">${iv}</span></div>
+      ${extra ? `<div class="meta">${extra}</div>` : ''}${stepsBlock(it)}</div>`,
+  });
 }
-
-// Ein/Aus-Schalter mit einem Satz Erklärung
-const switchRow = (key, on, label, hint) => `<label class="cb"><input type="checkbox" data-switch="${key}" ${on ? 'checked' : ''}> ${label}</label>
-  <p class="small">${hint}</p>`;
 
 // Vorgeschlagene Abmachungen als Knöpfe zum An-/Abwählen
 const ruleChips = (picked, attr) => `<div class="filters">${TEMPLATE_RULES.map((r) =>
@@ -313,25 +397,22 @@ const ruleChips = (picked, attr) => `<div class="filters">${TEMPLATE_RULES.map((
 const ownRules = () => (S.hh.rules || []).filter((r) => !TEMPLATE_RULES.includes(r));
 const toggled = (list, x) => (list.includes(x) ? list.filter((y) => y !== x) : [...list, x]);
 
-// Abmachung als Zeile: graue Checkbox, abgehakt bleibt sie stehen und zeigt, wer's erledigt hat
+// Abmachung als Zeile: wer zuerst erledigt, hakt für alle ab; Häkchen anderer sind gesperrt
 function ruleRow(text) {
   const c = S.comps.get(completionId(ruleId(text), ruleKey(), null));
-  return `<div class="item ${c ? 'done' : ''}" style="--pc:var(--shared)">
-    <label class="check"><input type="checkbox" data-action="toggle-rule" data-rule="${esc(text)}" ${c ? 'checked' : ''}
-      aria-label="${esc(text)} erledigt"><span class="box"></span></label>
-    <div class="body"><div class="head"><span class="title">${esc(text)}</span><span class="kind">täglich</span></div>
-      ${c ? `<div class="meta">erledigt von ${byName(c.by)}</div>` : ''}</div>
-  </div>`;
+  const locked = !!c && c.by !== S.me;
+  return swipeRow({
+    done: !!c, locked, off: false, by: c?.by,
+    check: `<input type="checkbox" data-action="toggle-rule" data-rule="${esc(text)}" ${c ? 'checked' : ''} ${locked ? 'disabled' : ''}
+      aria-label="${esc(text)} erledigt">`,
+    body: `<div class="body"><div class="head"><span class="title">${esc(text)}</span><span class="kind">täglich</span></div>
+      ${c ? `<div class="meta">erledigt von ${byName(c.by)}</div>` : ''}</div>`,
+  });
 }
 
 // Aufklappbarer Bereich; Zustand bleibt beim Neuzeichnen erhalten
-function fold(key, summary, body) {
-  return `<details class="fold" data-fold="${key}" ${S.open[key] ? 'open' : ''}><summary>${summary}</summary>${body}</details>`;
-}
-
-// Erledigt pro Person (für die Fairness-Bilanz)
-function balance(list) {
-  return S.hh.persons.map((p) => `${pn(p.id)} <strong>${list.filter((c) => c.by === p.id).length}</strong>`).join(' · ');
+function fold(key, summary, body, openByDefault = false) {
+  return `<details class="fold" data-fold="${key}" ${S.open[key] ?? openByDefault ? 'open' : ''}><summary>${summary}</summary>${body}</details>`;
 }
 
 function section(title, items, { lead, cls = '' } = {}) {
@@ -349,90 +430,110 @@ function badgeCount() {
 let lastBadge = -1;
 function updateBadge() {
   if (!('setAppBadge' in navigator)) return;
-  const n = badgeCount();
+  const n = ls.get('badge') === '0' ? 0 : badgeCount();
   if (n === lastBadge) return;
   lastBadge = n;
   (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 
-function badgeSetting() {
-  if (!('setAppBadge' in navigator)) {
-    return '<p class="small">Hier nicht möglich. Am iPhone geht das nur, wenn Fairplan vom Homescreen geöffnet wird (ab iOS 16.4).</p>';
-  }
-  const perm = 'Notification' in window ? Notification.permission : 'granted';
-  if (perm === 'granted') return `<p class="small">Eingeschaltet. Gerade: ${badgeCount()}.</p>`;
-  if (perm === 'denied') return '<p class="small">Mitteilungen sind gesperrt. Am iPhone: Einstellungen → Mitteilungen → Fairplan → Mitteilungen erlauben.</p>';
-  return `<p class="small">Am iPhone muss man dafür Mitteilungen erlauben (es kommen keine Nachrichten, nur die Zahl).</p>
-    <div class="btnrow"><button class="btn" data-action="badge">Zahl am App-Icon einschalten</button></div>`;
-}
+const paused = (w) => (w.owner === null
+  ? S.hh.persons.every((p) => awayDuring(S.hh, p.id, toDay(w.start), toDay(w.end)))
+  : awayDuring(S.hh, w.owner, toDay(w.start), toDay(w.end)));
+const colorOf = (id) => { const p = person(id); return p ? `var(--c-${p.color})` : 'var(--shared)'; };
+
+// ---------- Aktuell ----------
+
+const mineItem = (i) => i.owner === S.me || i.owner === null;
+// Eigene vor gemeinsamen, dann nach Rhythmus (täglich → wöchentlich → monatlich …)
+const byOwnerRhythm = (a, b) => (a.owner === S.me ? 0 : 1) - (b.owner === S.me ? 0 : 1)
+  || kindRank(a.task) - kindRank(b.task) || (a.due || '').localeCompare(b.due || '') || (a.task.order ?? 0) - (b.task.order ?? 0);
+const weekStart = () => fromDay(toDay(S.today) - weekdayOf(S.today));
+const doneMap = () => new Map([...S.dayComps.map((c) => [c.id, c]), ...S.comps]);
+const myDays = () => S.dayComps.filter((c) => c.by === S.me);
+const isAway = (id, day) => { const a = S.hh.away?.[id]; return !!(a?.from && a?.to && a.from <= day && day <= a.to); };
+const myStreaks = () => streaks(myDays().map((c) => c.day), S.today, (d) => isAway(S.me, d));
+const daysText = (n) => `${n} ${n === 1 ? 'Tag' : 'Tage'}`;
 
 function viewToday() {
   const items = allItems();
-  const mine = (i) => i.owner === S.me || i.owner === null;
+  const sun = weekEnd(), mon = weekStart();
   const open = items.filter((i) => i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming');
-  const byDate = (key) => (a, b) => (a[key] || '').localeCompare(b[key] || '')
-    || kindRank(a.task) - kindRank(b.task) || (a.task.order ?? 0) - (b.task.order ?? 0);
-  const sun = weekEnd();
-
-  // Gruppiert nach Termin: Noch offen (vergessen) · Heute (jetzt dran) · Diese Woche (Termin bis So) · Später
-  const late = open.filter((i) => mine(i) && i.status === 'overdue').sort(byDate('end'));
-  const today = open.filter((i) => mine(i) && i.status === 'due').sort(byDate('end'));
-  const week = open.filter((i) => mine(i) && i.status === 'upcoming' && i.due <= sun).sort(byDate('due'));
-  // Später: was nach Sonntag noch in dieser Periode kommt, dazu die nächsten Termine der kommenden 2 Wochen
-  const soon = fromDay(toDay(S.today) + 14);
-  const later = [
-    ...open.filter((i) => mine(i) && i.status === 'upcoming' && i.due > sun),
-    ...items.filter((i) => mine(i) && i.status === 'idle' && i.next && i.next <= soon && kindOf(i.task) !== 'daily')
-      .map((i) => ({ ...i, due: i.next })),
-  ].sort(byDate('due'));
-  const need = sortItems(items.filter((i) => mine(i) && (i.status === 'need' || (i.status === 'done' && kindOf(i.task) === 'asneeded'))));
-  const doneToday = items.filter((i) => i.status === 'done' && i.completion?.day === S.today && kindOf(i.task) !== 'asneeded');
-
-  // Als Nächstes (für „Alles erledigt“): erste aus „Später“, sonst die früheste kommende eigene oder gemeinsame Aufgabe
-  const next = items.filter((i) => mine(i) && kindOf(i.task) !== 'daily' && kindOf(i.task) !== 'asneeded')
-    .map((i) => ({ title: i.task.title, date: i.status === 'upcoming' ? i.due : i.next }))
-    .filter((n) => n.date && n.date > S.today).sort((a, b) => a.date.localeCompare(b.date))[0];
-
-  const upNext = later[0] ? `${esc(later[0].task.title)}, ${whenText(later[0])}`
-    : next ? `${esc(next.title)}, ab ${dayLabel(next.date)}` : '';
-
-  const away = S.hh.away?.[S.me];
-  const meAway = away?.from && away.from <= S.today && S.today <= away.to;
-  const banner = meAway
-    ? `Du bist bis ${fmtDate(away.to)} als abwesend eingetragen. Deine Aufgaben pausieren.`
-    : late.length || today.length || week.length
-      ? `Heute ${today.length} · Diese Woche ${week.length}${late.length ? ` · <span class="late">${late.length}</span> noch offen` : ''}`
-      : `Alles erledigt.${upNext ? `<div class="small">Als Nächstes: ${upNext}</div>` : ''}`;
-
-  const group = (title, list, sub = whenText) => (list.length
-    ? `<section class="group"><h2>${title}<span class="count">${list.length}</span></h2>
-      <div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div></section>` : '');
-  const rows = (list, sub = whenText) => `<div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div>`;
-
-  // Andere Personen: ganz unten eingeklappt, je eine Zeile; abhaken = Vertretung
-  const others = S.hh.persons.filter((p) => p.id !== S.me).map((p) => {
-    const list = open.filter((i) => i.owner === p.id && i.status !== 'upcoming')
-      .sort((a, b) => (a.status === 'overdue' ? 0 : 1) - (b.status === 'overdue' ? 0 : 1) || byDate('end')(a, b));
-    return list.length ? fold(`other-${p.id}`, `<span>${pn(p.id)}: ${list.length} offen</span>`, rows(list)) : '';
-  }).join('');
+  // Aufgaben: Vergessenes, jetzt Dranes und was diese Woche noch kommt (lässt sich schon vorher abhaken)
+  const tasks = open.filter((i) => mineItem(i) && (i.status !== 'upcoming' || i.due <= sun)).sort(byOwnerRhythm);
+  const now = tasks.filter((i) => i.status !== 'upcoming');
+  const need = items.filter((i) => mineItem(i) && i.status === 'need').sort(byOwnerRhythm);
 
   const rules = (S.hh.rules || []).filter(Boolean);
-  return `<div class="banner now">${banner}</div>
-    ${rules.length ? `<section class="group"><h2>Abmachungen<span class="count">${rules.filter((r) => S.comps.has(completionId(ruleId(r), ruleKey(), null))).length}/${rules.length}</span></h2>
-      <div class="list">${rules.map(ruleRow).join('')}</div></section>` : ''}
-    ${group('Noch offen', late)}
-    ${group('Heute', today)}
-    ${group('Diese Woche', week)}
-    ${later.length ? fold('later', `Später <span class="count">${later.length}</span>`, rows(later)) : ''}
-    ${need.length ? fold('need', `Bei Bedarf <span class="count">${need.length}</span>`, rows(need, () => '')) : ''}
-    ${doneToday.length ? fold('done', `Heute erledigt <span class="count">${doneToday.length}</span>`, rows(doneToday, statusText)) : ''}
-    ${others}`;
+  const ruleDone = (r) => S.comps.get(completionId(ruleId(r), ruleKey(), null));
+  const openRules = rules.filter((r) => !ruleDone(r));
+  const doneRules = rules.filter(ruleDone);
+  const bonusToday = doneRules.filter((r) => ruleDone(r).by === S.me).length;
+  const doneToday = items.filter((i) => i.status === 'done' && i.completion?.day === S.today).sort(byOwnerRhythm);
+
+  // Statuskarte: heute x/y; Balken = Woche Mo–So mit Vergessenem; Abmachungen nur als Bonus daneben
+  const x = doneToday.filter((i) => i.completion.by === S.me && kindOf(i.task) !== 'asneeded').length;
+  const y = x + now.length;
+  const week = dueBetween(S.tasks, S.hh, mon, sun, doneMap(), S.me);
+  const forgotten = now.filter((i) => i.status === 'overdue' && i.due < mon).length;
+  const weekDone = week.filter((w) => w.done).length;
+  const weekAll = week.length + forgotten;
+  const inWeek = myDays().filter((c) => c.day >= mon && c.day <= sun);
+  const bonus = inWeek.filter((c) => c.rule).length;
+  const weekCount = inWeek.length - bonus;
+  const { current } = myStreaks();
+  const streakText = S.dayFrom > S.hh.setup && current >= 60 ? '60+ Tage' : daysText(current);
+
+  const next = items.filter((i) => mineItem(i) && !['daily', 'asneeded'].includes(kindOf(i.task)))
+    .map((i) => ({ title: i.task.title, date: i.status === 'upcoming' ? i.due : i.next }))
+    .filter((n) => n.date && n.date > S.today).sort((a, b) => a.date.localeCompare(b.date))[0];
+  const away = S.hh.away?.[S.me];
+  const meAway = away?.from && away.from <= S.today && S.today <= away.to;
+  const allDone = !now.length;
+  const me = person(S.me);
+
+  const card = `<section class="card ${allDone ? 'alldone' : ''}">
+      <div><span class="card-label">Deine Aufgaben heute</span>
+        <span class="card-big">${x}<small> / ${y}</small></span></div>
+      <div><div class="bar-head"><span>Diese Woche ${weekDone} von ${weekAll}</span>${bonus ? `<span class="pill">+${bonus} Bonus</span>` : ''}</div>
+        <div class="bar"><i style="width:${weekAll ? Math.round((weekDone / weekAll) * 100) : 0}%"></i></div></div>
+      <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : `Noch ${now.length} offen`}</span>
+      ${next ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
+      <hr>
+      <div class="duo"><div><span>Deine Woche</span><b>${weekCount} erledigt</b></div>
+        <div><span>Serie</span><b>${streakText} in Folge</b></div></div>
+    </section>
+    ${allDone && !meAway ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${animalSvg(me.color)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
+  S.cheered = allDone; // Tier nur beim ersten Mal einblenden, nicht bei jedem Neuzeichnen
+
+  const rows = (list, sub = whenText) => `<div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div>`;
+  const head = (name, n, cls = '') => `${name} <span class="count ${cls}">${n}</span>`;
+
+  // Andere Personen: eingeklappt, abhaken = Vertretung
+  const others = S.hh.persons.filter((p) => p.id !== S.me).map((p) => {
+    const list = open.filter((i) => i.owner === p.id && i.status !== 'upcoming').sort(byOwnerRhythm);
+    return list.length ? fold(`other-${p.id}`, head(esc(p.name), list.length), rows(list)) : '';
+  }).join('');
+
+  const doneRows = [
+    ...doneRules.map((r) => [0, ruleRow(r)]),
+    ...doneToday.map((i) => [kindRank(i.task), nowRow(i, doneText(i))]),
+  ].sort((a, b) => a[0] - b[0]).map((r) => r[1]).join('');
+
+  return `${card}
+    ${rules.length ? fold('rules', bonusToday ? head('Abmachungen', `+${bonusToday} Bonus`, 'bonus') : head('Abmachungen', openRules.length), `<div class="list">${openRules.map(ruleRow).join('')}</div>`, true) : ''}
+    ${fold('tasks', head('Aufgaben', tasks.length), rows(tasks), true)}
+    ${need.length ? fold('need', head('Bei Bedarf', need.length), rows(need, () => '')) : ''}
+    ${others}
+    ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.length), `<div class="list">${doneRows}</div>`) : ''}`;
 }
 
+const doneText = (it) => `erledigt von ${byName(it.completion.by)}`;
+
+// ---------- Aufgabenliste (Mehr) ----------
+
 function filterBar() {
-  const [p1, p2] = S.hh.persons;
   const f = S.filter;
-  return [['all', 'Alle'], [p1.id, p1.name], [p2.id, p2.name], ['shared', 'Gemeinsam']]
+  return [['all', 'Alle'], ...S.hh.persons.map((p) => [p.id, p.name]), ['shared', 'Gemeinsam']]
     .map(([v, l]) => `<button data-filter="${esc(v)}" aria-pressed="${f === v}">${esc(l)}</button>`).join('');
 }
 
@@ -441,7 +542,7 @@ function kindBar() {
     .map(([v, l]) => `<button data-kind-filter="${v}" aria-pressed="${S.kindFilter === v}">${esc(l)}</button>`).join('');
 }
 
-function viewAll() {
+function viewTasks() {
   const f = S.filter, kf = S.kindFilter;
   const items = allItems().filter((i) => (f === 'all' || (f === 'shared' ? i.owner === null : i.owner === f))
     && (kf === 'all' || kindOf(i.task) === kf));
@@ -449,207 +550,323 @@ function viewAll() {
     const g = sortItems(items.filter((i) => kindOf(i.task) === k));
     return g.length ? section(KIND_LABEL[k], g, { lead: 'owner' }) : '';
   }).join('');
-  return `<div class="filters">${filterBar()}</div><div class="filters">${kindBar()}</div>
-    ${groups || '<p class="muted" style="margin-top:24px">Keine Aufgaben.</p>'}`;
+  const load = loadByPerson(S.tasks, S.hh)[S.me] || 0;
+  return `<div class="btnrow" style="margin-top:18px"><button class="btn primary block" data-edit="">${icon('plus', 18)}Aufgabe hinzufügen</button></div>
+    <div class="filters">${filterBar()}</div><div class="filters">${kindBar()}</div>
+    <p class="small">Dein Aufwand pro Monat: ${hours(load)} h</p>
+    ${groups || '<p class="none" style="margin-top:24px">Keine Aufgaben.</p>'}`;
 }
 
-// Sichtbarer Kalenderzeitraum: ganze Wochen (Mo–So) rund um den Monat
-function calRange() {
-  const month = S.calMonth || S.today.slice(0, 7);
-  const [y, m] = month.split('-').map(Number);
-  const first = toDay(`${month}-01`);
-  const last = first + new Date(y, m, 0).getDate() - 1;
-  return [fromDay(first - weekdayOf(fromDay(first))), fromDay(last + 6 - weekdayOf(fromDay(last)))];
+// ---------- Plan ----------
+
+const planAnchor = () => S.planDate || S.today;
+function planRange() {
+  const a = planAnchor();
+  if (S.planMode === 'week') {
+    const from = toDay(a) - weekdayOf(a);
+    return [fromDay(from), fromDay(from + 6)];
+  }
+  const [y, m] = a.split('-').map(Number);
+  const first = `${a.slice(0, 7)}-01`;
+  return [first, fromDay(toDay(first) + new Date(y, m, 0).getDate() - 1)];
 }
+const shortMonth = (s) => asDate(s).toLocaleDateString('de-AT', { month: 'short' }).replace('.', '');
+const compRhythm = (c) => {
+  if (c.rule) return 'Abmachung';
+  const t = S.tasks.find((x) => x.id === c.taskId);
+  return t ? KIND_LABEL[kindOf(t)] : '';
+};
 
-const paused = (w) => (w.owner === null
-  ? S.hh.persons.every((p) => awayDuring(S.hh, p.id, toDay(w.start), toDay(w.end)))
-  : awayDuring(S.hh, w.owner, toDay(w.start), toDay(w.end)));
-const colorOf = (id) => { const p = person(id); return p ? `var(--c-${p.color})` : 'var(--shared)'; };
-
-// Monatsraster ab Montag: pro Tag ein Punkt je Person, die etwas erledigt hat.
-// Optional („Geplantes anzeigen“): Ringe = ab diesem Tag ist etwas dran (Farbe = wer).
-// Ringe nur ab heute und nie vor dem Start des Plans.
-// Oben die Monatsbilanz, darunter der Verlauf des Monats. Tag antippen öffnet ein Panel von unten.
-function viewCalendar() {
-  const month = S.calMonth || S.today.slice(0, 7);
-  const [from, to] = calRange();
-  const gridStart = toDay(from), gridEnd = toDay(to);
-  const plan = ls.get('plan') === '1';
-
+function viewPlan() {
+  const [from, to] = planRange();
+  const isWeek = S.planMode === 'week';
+  const sel = S.calDay || S.today;
   const doneOn = new Map();
   for (const c of S.dayComps) { if (!doneOn.has(c.day)) doneOn.set(c.day, []); doneOn.get(c.day).push(c); }
-  const wins = plan || S.calDay ? S.tasks.flatMap((t) => windowsBetween(t, S.hh, from, to)) : [];
-  const starts = new Map();
-  for (const w of wins) {
-    if (kindOf(w.task) === 'daily') continue;
-    if (!starts.has(w.start)) starts.set(w.start, new Set());
-    starts.get(w.start).add(w.owner);
-  }
-
   const hol = new Map([...holidays(+from.slice(0, 4)), ...holidays(+to.slice(0, 4))]);
-  const cells = [];
-  for (let d = gridStart; d <= gridEnd; d++) {
-    const ds = fromDay(d);
+
+  const cell = (ds) => {
     const done = doneOn.get(ds) || [];
-    const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id))
-      .map((p) => `<i style="--pc:var(--c-${p.color})"></i>`).join('')
-      + (plan && ds >= S.today && ds >= S.hh.setup ? [...(starts.get(ds) || [])].map((o) => `<i class="plan" style="--pc:${colorOf(o)}"></i>`).join('') : '');
-    const cls = [ds.slice(0, 7) !== month ? 'out' : '', ds === S.today ? 'today' : '', ds === S.calDay ? 'sel' : '', hol.has(ds) ? 'holiday' : ''].join(' ');
-    cells.push(`<button class="day ${cls}" data-cal-day="${ds}" ${hol.has(ds) ? `title="${esc(hol.get(ds))}"` : ''}><span>${asDate(ds).getDate()}</span><span class="dots">${dots}</span></button>`);
+    const dots = S.hh.persons.filter((p) => done.some((c) => c.by === p.id)).map((p) => `<i style="--pc:var(--c-${p.color})"></i>`).join('');
+    const away = S.hh.persons.find((p) => isAway(p.id, ds));
+    const cls = [ds === S.today ? 'today' : '', ds === sel ? 'sel' : '', hol.has(ds) ? 'holiday' : '', away ? 'away' : ''].join(' ');
+    const label = asDate(ds).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
+    return `<button class="day ${cls}" data-pick-day="${ds}" aria-pressed="${ds === sel}" aria-label="${label}" ${away ? `style="--pc:var(--c-${away.color})"` : ''}>
+      ${isWeek ? `<small>${WEEKDAYS[weekdayOf(ds)]}</small>` : ''}<span>${asDate(ds).getDate()}</span><span class="dots">${dots}</span></button>`;
+  };
+  const cells = [];
+  if (!isWeek) for (let i = 0; i < weekdayOf(from); i++) cells.push('<span class="day blank"></span>');
+  for (let d = toDay(from); d <= toDay(to); d++) cells.push(cell(fromDay(d)));
+  const title = isWeek
+    ? `${asDate(from).getDate()}. ${shortMonth(from)} – ${asDate(to).getDate()}. ${shortMonth(to)}`
+    : asDate(from).toLocaleDateString('de-AT', { month: 'long', year: 'numeric' });
+
+  return `<div class="seg"><button data-plan-mode="week" aria-pressed="${isWeek}">Woche</button><button data-plan-mode="month" aria-pressed="${!isWeek}">Monat</button></div>
+    <div class="calhead"><button class="navbtn" data-plan-nav="-1" aria-label="Zurück">${icon('back', 20)}</button><strong>${title}</strong><button class="navbtn" data-plan-nav="1" aria-label="Weiter">${icon('chevron', 20)}</button></div>
+    ${isWeek ? '' : `<div class="cal-grid">${WEEKDAYS.map((w) => `<span class="wd">${w}</span>`).join('')}</div>`}
+    <div class="cal-grid ${isWeek ? 'week' : ''}">${cells.join('')}</div>
+    ${dayDetail(sel, doneOn, hol.get(sel))}
+    ${nextTwoWeeks()}`;
+}
+
+// Tagesdetail: Erledigtes (wer, was, wann; eigene rückgängig) und Geplantes bzw. offen Gebliebenes
+function dayDetail(sel, doneOn, holiday) {
+  const past = sel < S.today;
+  const byId = doneMap();
+  const wins = S.tasks.flatMap((t) => windowsBetween(t, S.hh, sel, sel)).filter((w) => kindOf(w.task) !== 'daily'
+    && !byId.has(completionId(w.task.id, w.key, w.slot)) && !paused(w)
+    && (past ? w.end === sel && w.start >= S.dayFrom : sel === S.today ? w.start <= sel : w.start === sel));
+  wins.sort((a, b) => kindRank(a.task) - kindRank(b.task));
+  const done = (doneOn.get(sel) || []).slice().sort((a, b) => a.at.localeCompare(b.at));
+
+  const planned = wins.map((w) => {
+    const p = person(w.owner);
+    return `<div class="drow"><span class="ring" style="--pc:${colorOf(w.owner)}"></span><span class="t">${esc(w.task.title)}</span>
+      <span class="who">${p ? byName(p.id) : 'Gemeinsam'}</span></div>`;
+  }).join('');
+  const doneRows = done.map((c) => {
+    const p = person(c.by);
+    const time = new Date(c.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
+    const proxy = c.forPerson && c.forPerson !== c.by ? ` · für ${esc(person(c.forPerson)?.name ?? '?')}` : '';
+    const rh = compRhythm(c);
+    return `<div class="drow">${p ? avatar(p, 's') : ''}<span class="t">${esc(c.title)}<small>${esc(p?.name ?? '?')}${rh ? ` · ${rh}` : ''}${proxy}</small></span>
+      <time>${time}</time>${c.by === S.me ? `<button class="minibtn" data-reopen="${esc(c.id)}">Rückgängig</button>` : ''}</div>`;
+  }).join('');
+  const awayP = S.hh.persons.filter((p) => isAway(p.id, sel));
+  const dayName = sel === S.today ? 'Heute' : WEEKDAYS_LONG[weekdayOf(sel)];
+  return `<h2>${dayName}, ${asDate(sel).getDate()}. ${shortMonth(sel)}${holiday ? ` · ${esc(holiday)}` : ''}</h2>
+    ${awayP.map((p) => `<div class="awaynote" style="--pc:var(--c-${p.color})">${esc(p.name)} ist abwesend</div>`).join('')}
+    ${planned ? `${past ? '<p class="none">Offen geblieben</p>' : ''}<div class="tile">${planned}</div>` : ''}
+    ${doneRows ? `<div class="tile">${doneRows}</div>` : ''}
+    ${planned || doneRows || awayP.length ? '' : '<p class="none">Nichts an diesem Tag.</p>'}`;
+}
+
+// Nächste 2 Wochen: kommende Aufgaben ohne Tägliches, Abwesenheiten in Personenfarbe
+function nextTwoWeeks() {
+  const first = toDay(S.today) + 1, last = first + 13;
+  const byId = doneMap();
+  const days = new Map();
+  const add = (ds, html) => { if (!days.has(ds)) days.set(ds, []); days.get(ds).push(html); };
+  for (const p of S.hh.persons) {
+    const a = S.hh.away?.[p.id];
+    if (!a?.from || !a?.to || toDay(a.to) < first || toDay(a.from) > last) continue;
+    add(fromDay(Math.max(first, toDay(a.from))), `<li class="away"><i style="--pc:var(--c-${p.color})"></i><span class="by" data-c="${p.color}">${esc(p.name)} abwesend bis ${fmtDate(a.to)}</span></li>`);
   }
+  const wins = S.tasks.flatMap((t) => windowsBetween(t, S.hh, fromDay(first), fromDay(last)))
+    .filter((w) => kindOf(w.task) !== 'daily' && toDay(w.start) >= first && !byId.has(completionId(w.task.id, w.key, w.slot)) && !paused(w))
+    .sort((a, b) => kindRank(a.task) - kindRank(b.task));
+  for (const w of wins) add(w.start, `<li><i style="--pc:${colorOf(w.owner)}"></i><span>${esc(w.task.title)}</span></li>`);
+  const rows = [...days.keys()].sort().map((ds) => `<div class="urow"><div class="d"><small>${WEEKDAYS[weekdayOf(ds)]}</small><b>${fmtDate(ds, false)}</b></div><ul>${days.get(ds).join('')}</ul></div>`).join('');
+  return `<h2>Nächste 2 Wochen</h2>${rows ? `<div class="tile pad">${rows}</div><span class="hint">Ohne tägliche Aufgaben.</span>` : '<p class="none">Nichts geplant.</p>'}`;
+}
 
-  // Monatsbilanz: eine Zeile, darunter zwei dünne Balken in den Personenfarben
-  const monthComps = S.dayComps.filter((c) => c.day.startsWith(month));
-  const counts = S.hh.persons.map((p) => [p, monthComps.filter((c) => c.by === p.id).length]);
-  const bars = monthComps.length
-    ? counts.filter(([, n]) => n).map(([p, n]) => `<i style="flex:${n};--pc:var(--c-${p.color})"></i>`).join('')
-    : '<i class="empty"></i>';
-  const monthName = asDate(`${month}-01`).toLocaleDateString('de-AT', { month: 'long' });
+// ---------- Statistik (nur eigene Zahlen) ----------
 
-  // Verlauf des Monats, neueste zuerst
-  let last = '';
-  const hist = monthComps.slice().sort((a, b) => b.at.localeCompare(a.at)).map((c) => {
-    const head = c.day !== last ? `<h2>${asDate(c.day).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' })}</h2>` : '';
-    last = c.day;
-    return head + histRow(c);
+const MILESTONES = {
+  check: 'M5 12.5l4.5 4.5L19 7.5',
+  flame: 'M12 3c1 3.5 4.5 5 4.5 9.5A4.5 4.5 0 0 1 7.5 12.5c0-2 1-3.5 2-4.5.3 2 1.5 3 2.5 3 0-3-1-5.5 0-8z',
+  cup: 'M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3',
+  star: 'M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z',
+  cal: 'M3 5h18v16H3zM3 10h18M8 3v4M16 3v4',
+};
+
+function monthBounds(s) {
+  const [y, m] = s.split('-').map(Number);
+  const first = `${s.slice(0, 7)}-01`;
+  return [first, fromDay(toDay(first) + new Date(y, m, 0).getDate() - 1)];
+}
+
+function statPeriod() {
+  const today = S.today, year = +today.slice(0, 4);
+  const count = (list, a, b) => list.filter((c) => c.day >= a && c.day <= b).length;
+  if (S.statMode === 'month') {
+    const [a, b] = monthBounds(today);
+    const bars = [];
+    for (let d = toDay(a) - weekdayOf(a); d <= toDay(b); d += 7) {
+      const s = fromDay(d), e = fromDay(d + 6);
+      bars.push({ label: `KW ${isoWeek(d).week}`, from: s < a ? a : s, to: e > b ? b : e, now: s <= today && today <= e });
+    }
+    const [pa, pb] = monthBounds(fromDay(toDay(a) - 1));
+    return { from: a, to: b, prev: [pa, pb], bars, count, label: `Im ${asDate(a).toLocaleDateString('de-AT', { month: 'long' })} erledigt`, unit: 'letzten Monat' };
+  }
+  if (S.statMode === 'year') {
+    const bars = Array.from({ length: 12 }, (_, i) => {
+      const s = `${year}-${String(i + 1).padStart(2, '0')}-01`;
+      const [ma, mb] = monthBounds(s);
+      return { label: MONTHS[i][0], from: ma, to: mb, now: today >= ma && today <= mb };
+    });
+    return { from: `${year}-01-01`, to: `${year}-12-31`, prev: [`${year - 1}-01-01`, `${year - 1}-12-31`], bars, count, label: `${year} erledigt`, unit: 'im Vorjahr' };
+  }
+  const a = weekStart();
+  const bars = WEEKDAYS.map((w, i) => { const s = fromDay(toDay(a) + i); return { label: w, from: s, to: s, now: s === today }; });
+  return { from: a, to: weekEnd(), prev: [fromDay(toDay(a) - 7), fromDay(toDay(a) - 1)], bars, count, label: 'Diese Woche erledigt', unit: 'letzte Woche' };
+}
+
+function viewStats() {
+  const mine = S.dayComps.filter((c) => c.by === S.me);
+  const tasks = mine.filter((c) => !c.rule), rules = mine.filter((c) => c.rule);
+  const P = statPeriod();
+  const done = P.count(tasks, P.from, P.to);
+  const bonus = P.count(rules, P.from, P.to);
+  const before = P.count(tasks, P.prev[0], P.prev[1]);
+  const diff = done - before;
+  const trend = !done && !before ? 'Der erste Haken wartet schon.'
+    : !before ? 'Schön, dass du dran bist.'
+      : diff > 0 ? `${diff} mehr als ${P.unit} – weiter so!`
+        : diff === 0 ? `Gleich viel wie ${P.unit}.` : `${P.unit[0].toUpperCase()}${P.unit.slice(1)}: ${before}.`;
+  const vals = P.bars.map((b) => P.count(tasks, b.from, b.to));
+  const max = Math.max(1, ...vals);
+  const bars = P.bars.map((b, i) => `<div class="${b.now ? 'now' : ''}"><span>${vals[i] || ''}</span><i class="${vals[i] ? '' : 'zero'}" style="height:${vals[i] ? Math.max(8, Math.round((vals[i] / max) * 76)) : 4}px"></i><em>${b.label}</em></div>`).join('');
+
+  const { current, longest } = myStreaks();
+  const byId = doneMap();
+  const end = P.to < S.today ? P.to : S.today;
+  const due = dueBetween(S.tasks, S.hh, P.from, end, byId, S.me);
+  const rhythm = KINDS.map((k) => {
+    const g = due.filter((w) => kindOf(w.task) === k);
+    if (!g.length) return '';
+    const n = g.filter((w) => w.done).length;
+    return `<div class="rrow"><div><b>${KIND_LABEL[k]}</b><span>${n} von ${g.length}</span></div><div class="bar thin"><i style="width:${Math.round((n / g.length) * 100)}%"></i></div></div>`;
   }).join('');
 
-  const title = asDate(`${month}-01`).toLocaleDateString('de-AT', { month: 'long', year: 'numeric' });
-  return `<div class="calhead">
-      <button class="navbtn" data-cal-month="-1" aria-label="Voriger Monat">‹</button>
-      <strong>${title}</strong>
-      <button class="navbtn" data-cal-month="1" aria-label="Nächster Monat">›</button>
+  // Meilensteine: erreicht in Personenfarbe, offen grau mit „noch X“
+  const left = (n, goal) => (n >= goal ? 'geschafft' : `noch ${goal - n}`);
+  const sinceStart = toDay(S.today) - toDay(S.hh.setup);
+  const months = [];
+  for (let d = toDay(monthBounds(S.hh.setup)[0]); d < toDay(monthBounds(S.today)[0]); d = toDay(monthBounds(fromDay(d))[1]) + 1) months.push(monthBounds(fromDay(d)));
+  const wholeMonth = months.slice(-24).some(([a, b]) => { const l = dueBetween(S.tasks, S.hh, a, b, byId, S.me); return l.length && l.every((w) => w.done); });
+  const [ma, mb] = monthBounds(S.today);
+  const monthOpen = dueBetween(S.tasks, S.hh, ma, mb, byId, S.me).filter((w) => !w.done).length;
+  const badges = [
+    ['Erste Woche', sinceStart >= 7, left(sinceStart, 7), MILESTONES.check],
+    ['7 Tage Serie', longest >= 7, left(longest, 7), MILESTONES.flame],
+    ['100 Aufgaben', tasks.length >= 100, left(tasks.length, 100), MILESTONES.cup],
+    ['30 Tage Serie', longest >= 30, left(longest, 30), MILESTONES.flame],
+    ['100 Bonus', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
+    ['Ganzer Monat', wholeMonth, wholeMonth ? 'geschafft' : `noch ${monthOpen}`, MILESTONES.cal],
+  ].map(([name, on, sub, path]) => `<div class="badge ${on ? 'on' : ''}"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg></i><b>${name}</b><small>${sub}</small></div>`).join('');
+
+  const seg = [['week', 'Woche'], ['month', 'Monat'], ['year', 'Jahr']].map(([v, l]) => `<button data-stat-mode="${v}" aria-pressed="${S.statMode === v}">${l}</button>`).join('');
+  return `<div class="seg">${seg}</div>
+    <section class="card">
+      <div class="card-top"><div><span class="card-label">${P.label}</span><span class="card-big">${done}</span></div><span class="pill">+${bonus} Bonus</span></div>
+      <div class="bars">${bars}</div>
+      <span class="card-open">${trend}</span>
+    </section>
+    <div class="tiles2"><div class="stat"><span>Aktuelle Serie</span><b class="a">${daysText(current)}</b></div><div class="stat"><span>Längste Serie</span><b>${daysText(longest)}</b></div></div>
+    ${rhythm ? `<h2>Nach Rhythmus</h2><div class="tile pad">${rhythm}</div>` : ''}
+    <h2>Meilensteine</h2><div class="badges">${badges}</div>`;
+}
+
+// ---------- Mehr ----------
+
+const goRow = (go, ic, label, value = '', cls = '') => `<button class="mrow" data-go="${go}"><span class="ic ${cls}">${icon(ic, 18)}</span><span class="l">${label}</span>${value !== '' ? `<span class="v">${value}</span>` : ''}<span class="chev">${icon('chevron', 16)}</span></button>`;
+const switchLine = (key, ic, label, hint, on, disabled = false) => `<div class="mrow"><span class="ic">${icon(ic, 18)}</span><label class="l" for="sw-${key}">${label}${hint ? `<small>${hint}</small>` : ''}</label>
+  <span class="toggle"><input type="checkbox" id="sw-${key}" role="switch" data-switch="${key}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span></span></span></div>`;
+
+function badgeRow() {
+  if (!('setAppBadge' in navigator)) return switchLine('badge', 'badge', 'Zahl am App-Icon', 'Nur vom Home-Bildschirm möglich', false, true);
+  const perm = 'Notification' in window ? Notification.permission : 'granted';
+  if (perm === 'denied') return switchLine('badge', 'badge', 'Zahl am App-Icon', 'Gesperrt: Einstellungen → Mitteilungen → Fairplan', false, true);
+  return switchLine('badge', 'badge', 'Zahl am App-Icon', 'Offenes ohne Tägliches', perm === 'granted' && ls.get('badge') !== '0');
+}
+
+function viewMore() {
+  const hh = S.hh, me = person(S.me);
+  const awayNames = hh.persons.filter((p) => hh.away?.[p.id]?.to >= S.today).map((p) => esc(p.name)).join(', ');
+  const shared = (hh.sharedDays?.length ? hh.sharedDays : [5]).map((d) => WEEKDAYS[d]).join(', ');
+  const themes = [['dark', 'Dunkel'], ['light', 'Hell'], ['zart', 'Zart']]
+    .map(([v, l]) => `<button data-theme-set="${v}" aria-pressed="${theme() === v}">${l}</button>`).join('');
+  return `<button class="ptile" data-go="profil">${avatar(me, 'l')}<span>${esc(me.name)}</span><span class="chev">${icon('chevron', 18)}</span></button>
+    <h2>Wir</h2><div class="tile">
+      ${goRow('haushalt', 'users', 'Haushalt')}
+      ${goRow('putztag', 'plan', 'Gemeinsamer Putztag', shared)}
+      ${goRow('abwesenheit', 'away', 'Abwesenheit', awayNames || 'Keine')}
     </div>
-    <div class="bal"><div class="small">Im ${esc(monthName)} erledigt: ${counts.map(([p, n]) => `${byName(p.id)} ${n}`).join(' · ')}</div>
-      <div class="bal-bar">${bars}</div></div>
-    <div class="cal-grid">${WEEKDAYS.map((w) => `<span class="wd">${w}</span>`).join('')}${cells.join('')}</div>
-    <label class="cb"><input type="checkbox" data-action="plan" ${plan ? 'checked' : ''}> Geplantes anzeigen</label>
-    <h2 class="hist-title">Verlauf</h2>
-    ${hist || '<p class="muted">In diesem Monat noch nichts erledigt.</p>'}
-    <p class="small">Feiertage sind im Kalender umrandet.</p>
-    ${S.calDay ? dayPanel(S.calDay, wins, doneOn, hol.get(S.calDay)) : ''}`;
+    <h2>Aufgaben</h2><div class="tile">
+      ${goRow('aufgaben', 'list', 'Aufgabenliste', S.tasks.length)}
+      ${goRow('abmachungen', 'star', 'Abmachungen', (hh.rules || []).length, 'a')}
+      <button class="mrow" data-action="reset-plan"><span class="ic">${icon('refresh', 18)}</span><span class="l">Plan neu einrichten</span><span class="chev">${icon('chevron', 16)}</span></button>
+    </div>
+    <h2>Dieses Gerät</h2><div class="tile">
+      ${badgeRow()}
+      ${canHaptic ? switchLine('vibrate', 'vibrate', 'Beim Abhaken vibrieren', '', ls.get('vibrate') !== '0') : ''}
+      <div class="mrow"><span class="ic">${icon('moon', 18)}</span><span class="l">Darstellung</span><div class="seg tiny">${themes}</div></div>
+    </div>
+    <h2>Verwaltung</h2><div class="tile">
+      ${goRow('code', 'qr', 'Haushalts-Code')}
+      ${goRow('backup', 'db', 'Backup', 'Export · Import')}
+      ${goRow('start', 'flag', 'Start des Plans', fmtDate(hh.setup, true))}
+    </div>
+    <button class="logout" data-action="leave">Auf diesem Gerät abmelden</button>
+    <p class="version">fairplan · Version ${APP_VERSION}</p>`;
 }
 
-function histRow(c) {
-  const time = new Date(c.at).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit' });
-  const proxy = c.forPerson && c.forPerson !== c.by ? ` für ${esc(person(c.forPerson)?.name ?? '?')}` : '';
-  return `<div class="hist"><span class="time">${time}</span><div><div>${esc(c.title)}</div>
-    <div class="meta">${byName(c.by)}${proxy}</div></div></div>`;
+function viewProfile() {
+  const hh = S.hh, me = person(S.me), idx = hh.persons.indexOf(me);
+  const kind = me.avatar === 'photo' && !me.photo ? 'letter' : me.avatar || 'letter';
+  const colors = COLORS.map(([c, l]) => {
+    const owner = hh.persons.find((p) => p.color === c && p.id !== S.me);
+    return `<button data-person-color="${idx}" data-color="${c}" aria-pressed="${me.color === c}" ${owner ? 'disabled' : ''} aria-label="${l}${owner ? `, vergeben an ${esc(owner.name)}` : ''}" style="--pc:var(--c-${c})">${animalSvg(c)}<span>${l}${owner ? '<small>vergeben</small>' : ''}</span></button>`;
+  }).join('');
+  return `<div class="pwrap"><div class="pav">${avatar(me, 'xl')}
+      <button class="cam" data-action="photo" aria-label="Foto wählen">${icon('camera', 17)}</button>
+      <input type="file" id="photoFile" accept="image/*" hidden></div>
+    <div class="avopts">
+      <button data-avatar="letter" aria-pressed="${kind === 'letter'}" aria-label="Anfangsbuchstabe">${esc(initial(me))}</button>
+      <button data-avatar="animal" aria-pressed="${kind === 'animal'}" aria-label="${ANIMALS[me.color]?.name ?? 'Tier'}">${animalSvg(me.color)}</button>
+      ${me.photo ? `<button data-avatar="photo" aria-pressed="${kind === 'photo'}" aria-label="Foto"><img src="${esc(me.photo)}" alt=""></button>` : ''}
+    </div></div>
+    <h2><label for="pname">Name</label></h2>
+    <input type="text" id="pname" data-person-name="${idx}" value="${esc(me.name)}" maxlength="30">
+    <h2>Deine Farbe</h2><div class="colors">${colors}</div>
+    <h2>Deine Putztage</h2>${dayChips(me.days?.length ? me.days : [5], `data-person-day="${idx}"`)}
+    <span class="hint">Ein oder mehrere Tage, an denen deine Aufgaben dran sind.</span>`;
 }
 
-// Panel von unten für einen Tag: was erledigt wurde (wer, wann, für wen) und was offen blieb bzw. dran ist
-function dayPanel(sel, wins, doneOn, holiday) {
-  const doneById = new Map([...S.comps, ...S.dayComps.map((c) => [c.id, c])]);
-  const isDone = (w) => doneById.has(completionId(w.task.id, w.key, w.slot));
-  const done = (doneOn.get(sel) || []).slice().sort((a, b) => a.at.localeCompare(b.at));
-  const past = sel < S.today;
-  // Vergangen: was an diesem Tag fällig war und nicht erledigt wurde. Heute/später: was an diesem Tag dran ist.
-  const open = wins.filter((w) => kindOf(w.task) !== 'daily' && !isDone(w) && !paused(w)
-    // nur Zeitfenster, die im geladenen Zeitraum beginnen – sonst fehlt evtl. die Erledigung
-    && (past ? w.end === sel && w.start >= calRange()[0] : w.start <= sel && sel <= w.end))
-    .sort((a, b) => a.end.localeCompare(b.end) || kindRank(a.task) - kindRank(b.task));
-  const openRows = open.map((w) => `<div class="hist"><i class="sw" style="--pc:${colorOf(w.owner)}"></i><div><div>${esc(w.task.title)}</div>
-    <div class="meta">${w.owner === null ? 'Gemeinsam' : esc(person(w.owner)?.name ?? '')}${past ? '' : ` · bis ${dayLabel(w.end)}`}</div></div></div>`).join('');
-  const title = asDate(sel).toLocaleDateString('de-AT', { weekday: 'long', day: 'numeric', month: 'long' });
-  return `<div class="panel-bg${S.panelAnim ? ' anim' : ''}" data-cal-close></div>
-    <div class="panel${S.panelAnim ? ' anim' : ''}" role="dialog" aria-label="${esc(title)}">
-      <div class="panel-head"><strong>${esc(title)}</strong><button class="navbtn" data-cal-close aria-label="Schließen">×</button></div>
-      ${holiday ? `<p class="small">Feiertag: ${esc(holiday)}</p>` : ''}
-      <h2>Erledigt<span class="count">${done.length}</span></h2>
-      ${done.map(histRow).join('') || '<p class="muted">Nichts erledigt.</p>'}
-      ${open.length ? `<h2>${past ? 'Offen geblieben' : 'Dran'}<span class="count">${open.length}</span></h2>${openRows}` : ''}
-    </div>`;
+function viewHousehold() {
+  const rows = S.hh.persons.map((p) => (p.id === S.me
+    ? `<button class="mrow" data-go="profil">${avatar(p, 'm')}<span class="l">${esc(p.name)}<small>du</small></span><span class="chev">${icon('chevron', 16)}</span></button>`
+    : `<div class="mrow">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span></div>`)).join('');
+  return `<h2>Personen</h2><div class="tile">${rows}</div>
+    <span class="hint">Jede Person ändert Name und Farbe in ihrem eigenen Profil.</span>
+    <button class="addrow" data-go="code">${icon('plus', 18)}Person einladen</button>`;
 }
 
-function viewSettings() {
-  const hh = S.hh;
-  const load = loadByPerson(S.tasks, hh);
+function viewCode() {
+  return `<div class="qrwrap"><div class="qr" id="qr" aria-label="QR-Code zum Beitreten"></div>
+      <span class="small">Code</span><span class="qrcode">${formatCode(S.code)}</span>
+      <p>Zum Beitreten den QR-Code scannen oder den Code eingeben. Nicht öffentlich teilen.</p></div>
+    <div class="btnrow" style="margin-top:20px"><button class="btn" data-action="copy">Kopieren</button>${navigator.share ? '<button class="btn" data-action="share">Teilen</button>' : '<button class="btn" data-action="copy-link">Link kopieren</button>'}</div>
+    ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}`;
+}
 
-  const persons = hh.persons.map((p, i) => `<div class="setting">
-      <label class="field">Person ${i + 1}<input type="text" data-person-name="${i}" value="${esc(p.name)}" maxlength="30"></label>
-      <div class="colors">${COLORS.map(([c, l]) => `<button data-person-color="${i}" data-color="${c}" aria-pressed="${p.color === c}"><i class="sw" style="--pc:var(--c-${c})"></i>${l}</button>`).join('')}</div>
-    </div>`).join('');
+const viewSharedDay = () => `<h2>Gemeinsamer Putztag</h2>${dayChips(S.hh.sharedDays?.length ? S.hh.sharedDays : [5], 'data-shared-day')}
+  <span class="hint">An diesen Tagen ist Gemeinsames dran.</span>`;
 
-  const tasks = S.tasks.length
-    ? S.tasks.slice().sort((x, y) => kindRank(x) - kindRank(y) || (x.order ?? 0) - (y.order ?? 0)).map((t) => `
-      <button class="rowbtn" data-edit="${esc(t.id)}"><span>${esc(t.title)}<br><span class="meta">${intervalLabel(t)} · ${assignLabel(t.assign)}${t.min ? ` · ${t.min} Min` : ''}${t.season ? ` · Saison ${seasonLabel(t.season)}` : ''}</span></span><span class="meta">Bearbeiten</span></button>`).join('')
-    : '<p class="muted">Noch keine Aufgaben.</p>';
-
-  const away = hh.persons.map((p) => {
-    const a = hh.away?.[p.id] || {};
-    return `<div class="setting"><p>${pn(p.id)}</p>
+function viewAway() {
+  const rows = S.hh.persons.map((p) => {
+    const a = S.hh.away?.[p.id] || {};
+    return `<h2>${esc(p.name)}${p.id === S.me ? ' (du)' : ''}</h2>
       <div class="inline"><label class="field">von<input type="date" data-away-from="${p.id}" value="${esc(a.from || '')}"></label>
         <label class="field">bis<input type="date" data-away-to="${p.id}" value="${esc(a.to || '')}"></label></div>
-      ${a.from || a.to ? `<button class="btn" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}</div>`;
+      ${a.from || a.to ? `<button class="btn block" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}`;
   }).join('');
-
-  const wir = `
-    <h2>Personen</h2>
-    ${persons}
-    <h2>Putztage</h2>
-    <p class="small">An diesen Tagen sind die Aufgaben der jeweiligen Person dran. Gemeinsames am gemeinsamen Putztag.</p>
-    ${hh.persons.map((p, i) => `<div class="setting"><p>${pn(p.id)}${p.id === S.me ? ' (du)' : ''}</p>${dayChips(p.days?.length ? p.days : [5], `data-person-day="${i}"`)}</div>`).join('')}
-    <div class="setting"><p>Gemeinsam</p>${dayChips(hh.sharedDays?.length ? hh.sharedDays : [5], 'data-shared-day')}</div>
-    <h2>Abwesend (Urlaub, krank)</h2>
-    <p class="small">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn beide weg sind.</p>
-    ${away}`;
-
-  const aufgaben = `
-    <p class="small">Aufwand pro Monat (Dauer × Häufigkeit, Gemeinsames je zur Hälfte): ${hh.persons.map((p) => `${byName(p.id)} ${hours(load[p.id])} h`).join(' · ')}</p>
-    <div class="btnrow"><button class="btn block" data-edit="">Aufgabe hinzufügen</button></div>
-    <div class="rows">${tasks}</div>
-    <h2>Unsere Abmachungen</h2>
-    <p class="small">Selbstverständliches für jeden Tag. Steht bei „Aktuell“ ganz oben: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für beide ab. Wird nie als offen angezeigt, zählt aber in Bilanz und Verlauf. Vorschläge antippen zum Auswählen, eigene unten eintragen (eine pro Zeile).</p>
-    ${ruleChips(hh.rules || [], 'data-rule-suggest')}
-    <label class="field">Eigene Abmachungen<textarea data-rules rows="4" placeholder="Pflanzen am Fensterbrett gießen&#10;Post reinholen">${esc(ownRules().join('\n'))}</textarea></label>
-    <h2>Plan neu einrichten</h2>
-    <p class="small">Aufgaben neu aus der Vorlage (fair aufgeteilt) oder leer aufbauen. Code, Verbindung zur anderen Person und Verlauf bleiben, gezählt wird ab heute.</p>
-    <div class="btnrow"><button class="btn block" data-action="reset-plan">Plan neu einrichten</button></div>`;
-
-  const geraet = `
-    <h2>Ich bin</h2>
-    <div class="btnrow">${hh.persons.map((p) => `<button class="btn" data-me="${p.id}" aria-pressed="${S.me === p.id}">${esc(p.name)}</button>`).join('')}</div>
-    <h2>Zahl am App-Icon</h2>
-    <p class="small">Zeigt, was bei dir vergessen oder jetzt dran ist (ohne Tägliches).</p>
-    ${badgeSetting()}
-    ${canHaptic ? `<h2>Vibrieren</h2>
-    ${switchRow('vibrate', ls.get('vibrate') !== '0', 'Beim Abhaken kurz vibrieren', 'Gilt nur für dieses Gerät.')}` : ''}
-    <h2>Darstellung</h2>
-    <div class="btnrow">
-      <button class="btn" data-theme-set="dark" aria-pressed="${theme() === 'dark'}">Dunkel</button>
-      <button class="btn" data-theme-set="light" aria-pressed="${theme() === 'light'}">Hell</button>
-    </div>`;
-
-  const haushalt = `
-    <h2>Einladen</h2>
-    <p class="small">QR-Code mit der Handy-Kamera scannen oder Link schicken. Nicht öffentlich teilen.</p>
-    ${fold('invite', 'QR-Code und Link', inviteBlock())}
-    <div class="btnrow"><button class="btn" data-action="copy">Code kopieren</button></div>
-    ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}
-    <h2>Backup</h2>
-    <p class="small">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt Aufgaben und Haushalts-Einstellungen durch die aus der Datei, der Verlauf bleibt und wird ergänzt.</p>
-    <div class="btnrow"><button class="btn" data-action="export">Daten exportieren</button><button class="btn" data-action="import">Daten importieren</button></div>
-    ${S.backup ? `<p class="small">Sicherung bereit: ${backupCounts(S.backup.data)}</p>
-    <div class="btnrow"><button class="btn" data-action="save-backup">Datei sichern</button></div>` : ''}
-    <input type="file" id="importFile" accept=".json,application/json" hidden>
-    <h2>Start des Plans</h2>
-    <label class="field">Ab diesem Tag zählen die Termine<input type="date" data-start value="${esc(hh.setup)}"></label>
-    <p class="small">Davor ist nichts „vergessen“. Wird beim Einrichten automatisch gesetzt. Ändern, wenn ihr erst später loslegen wollt (z. B. nach einem Urlaub oder Umzug) oder neu zu zählen beginnen wollt, ohne den Plan neu einzurichten. Auch der 2-Wochen-Rhythmus zählt ab hier.</p>
-    <h2>Abmelden</h2>
-    <p class="small">Entfernt den Haushalt nur von diesem Gerät. Mit dem Code kannst du wieder beitreten.</p>
-    <div class="btnrow"><button class="btn danger" data-action="leave">Auf diesem Gerät abmelden</button></div>`;
-
-  return `
-    ${optGroup('opt-wir', 'Wir', 'Personen, Putztage, Abwesenheit', wir)}
-    ${optGroup('opt-tasks', 'Aufgaben', 'Liste, Abmachungen, Plan neu einrichten', aufgaben)}
-    ${optGroup('opt-device', 'Dieses Gerät', 'Ich bin, Zahl am Icon, Vibrieren, Darstellung', geraet)}
-    ${optGroup('opt-hh', 'Haushalt', 'Einladen, Backup, Start, Abmelden', haushalt)}`;
+  return `${rows}<span class="hint">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn beide weg sind.</span>`;
 }
 
-// Gruppe in den Optionen: große, aufklappbare Fläche mit kurzer Inhaltsangabe
-const optGroup = (key, title, hint, body) => `<details class="fold opt" data-fold="${key}" ${S.open[key] ? 'open' : ''}>
-  <summary><span><strong>${title}</strong><span class="small">${hint}</span></span></summary><div class="opt-body">${body}</div></details>`;
+const viewRules = () => `<h2>Vorschläge</h2>${ruleChips(S.hh.rules || [], 'data-rule-suggest')}
+  <label class="field">Eigene Abmachungen (eine pro Zeile)<textarea data-rules rows="5" placeholder="Pflanzen am Fensterbrett gießen&#10;Post reinholen">${esc(ownRules().join('\n'))}</textarea></label>
+  <span class="hint">Selbstverständliches für jeden Tag: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für alle ab. Nie offen, zählt als Bonus.</span>`;
+
+const viewBackup = () => `<p class="small" style="margin-top:18px">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt Aufgaben und Haushalts-Einstellungen durch die aus der Datei, der Verlauf bleibt und wird ergänzt.</p>
+  <div class="btnrow"><button class="btn" data-action="export">Daten exportieren</button><button class="btn" data-action="import">Daten importieren</button></div>
+  ${S.backup ? `<p class="small">Sicherung bereit: ${backupCounts(S.backup.data)}</p>
+  <div class="btnrow"><button class="btn primary" data-action="save-backup">Datei sichern</button></div>` : ''}
+  <input type="file" id="importFile" accept=".json,application/json" hidden>`;
+
+const viewStart = () => `<label class="field" style="margin-top:18px">Ab diesem Tag zählen die Termine<input type="date" data-start value="${esc(S.hh.setup)}"></label>
+  <p class="small">Davor ist nichts „vergessen“. Wird beim Einrichten automatisch gesetzt. Ändern, wenn ihr erst später loslegen wollt (z. B. nach einem Urlaub oder Umzug) oder neu zu zählen beginnen wollt, ohne den Plan neu einzurichten. Auch der 2-Wochen-Rhythmus zählt ab hier.</p>`;
 
 function renderWhoAmI() {
   app.innerHTML = `<header class="top">${LOGO}</header>
@@ -790,6 +1007,7 @@ function resetPlan(withTemplate) {
   updateHH({ persons, sharedDays: st.shared, rules: [...setupRules(withTemplate), ...ownRules()], setup: st.start, swapped: false });
   S.setup = null;
   S.view = 'heute';
+  S.stack = [];
   window.scrollTo(0, 0);
   render();
   snack('Plan neu eingerichtet.');
@@ -841,10 +1059,9 @@ const standalone = () => navigator.standalone || matchMedia('(display-mode: stan
 
 // ---------- Aktionen ----------
 
-function theme() { return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'; }
+function theme() { return document.documentElement.dataset.theme || 'dark'; }
 function setTheme(t) {
   document.documentElement.dataset.theme = t;
-  $('meta[name="theme-color"]').content = t === 'light' ? '#ffffff' : '#111214';
   ls.set('theme', t);
 }
 
@@ -894,11 +1111,18 @@ function toggle(input) {
     haptic();
     const proxy = it.owner && it.owner !== S.me ? ` für ${esc(person(it.owner).name)}` : '';
     snack(`Erledigt${proxy}.`, () => S.store.removeCompletion(S.code, id));
-  } else {
-    const prev = S.comps.get(id);
-    S.store.removeCompletion(S.code, id);
-    snack('Wieder offen.', prev ? () => S.store.setCompletion(S.code, id, prev) : null);
-  }
+  } else if (!reopen(id, task.title)) input.checked = true;
+}
+
+// Eigene Erledigung zurücknehmen (Aktuell und Plan): mit Sicherheitsabfrage, Teilschritte gleich mit
+function reopen(id, title) {
+  if (!confirm(`„${title}“ wieder öffnen?`)) return false;
+  const prev = S.comps.get(id) || S.dayComps.find((c) => c.id === id);
+  S.store.removeCompletion(S.code, id);
+  const task = S.tasks.find((t) => t.id === prev?.taskId);
+  (task?.steps || []).forEach((_, i) => S.store.removeCompletion(S.code, `${id}__s${i}`));
+  snack('Wieder offen.');
+  return true;
 }
 
 function toggleRule(input) {
@@ -911,12 +1135,31 @@ function toggleRule(input) {
     });
     haptic();
     snack('Erledigt.', () => S.store.removeCompletion(S.code, id));
-  } else {
-    const prev = S.comps.get(id);
-    S.store.removeCompletion(S.code, id);
-    snack('Wieder offen.', prev ? () => S.store.setCompletion(S.code, id, prev) : null);
+  } else if (!reopen(id, title)) input.checked = true;
+}
+
+// Profilfoto: mittig zuschneiden und klein rechnen (bleibt im Gratis-Rahmen der Datenbank)
+async function setPhoto(input) {
+  const file = input.files[0];
+  input.value = '';
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const size = 160, side = Math.min(img.naturalWidth, img.naturalHeight);
+    const canvas = Object.assign(document.createElement('canvas'), { width: size, height: size });
+    canvas.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+    patchMe({ avatar: 'photo', photo: canvas.toDataURL('image/jpeg', 0.75) });
+  } catch (e) {
+    console.error(e);
+    snack('Foto konnte nicht geladen werden.');
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
+const patchMe = (patch) => updateHH({ persons: S.hh.persons.map((p) => (p.id === S.me ? { ...p, ...patch } : p)) });
 
 // ---------- Backup ----------
 
@@ -1023,25 +1266,33 @@ async function copyCode() {
 function updateHH(patch) { S.store.updateHousehold(S.code, patch); }
 
 app.addEventListener('click', (e) => {
-  const el = e.target.closest('button, [data-action], [data-cal-close]');
+  const el = e.target.closest('button, [data-action]');
   if (!el || el.disabled) return;
   const d = el.dataset;
-  if (d.view) {
-    if (d.view === 'kalender') { S.calMonth = null; S.calDay = null; }
-    S.view = d.view; window.scrollTo(0, 0); return render();
-  }
+  if (d.view) { S.stack = []; S.view = d.view; window.scrollTo(0, 0); return render(); }
+  if (d.go) { S.stack.push(S.view); S.view = d.go; window.scrollTo(0, 0); return render(); }
+  if (el.matches('[data-back]')) { S.view = S.stack.pop() || 'mehr'; window.scrollTo(0, 0); return render(); }
   if (d.filter) { S.filter = d.filter; return render(); }
   if (d.kindFilter) { S.kindFilter = d.kindFilter; return render(); }
   if (d.awayClear) return updateHH({ away: { ...(S.hh.away || {}), [d.awayClear]: {} } });
-  if (d.calDay) { S.calDay = d.calDay; S.panelAnim = true; render(); S.panelAnim = false; return; }
-  if (el.matches('[data-cal-close]')) { S.calDay = null; return render(); }
-  if (d.calMonth) {
-    const [y, m] = (S.calMonth || S.today.slice(0, 7)).split('-').map(Number);
-    const t = new Date(y, m - 1 + +d.calMonth, 1);
-    S.calMonth = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`;
-    S.calDay = null;
+  if (d.planMode) { S.planMode = d.planMode; S.planDate = S.calDay; return render(); }
+  if (d.planNav) {
+    const a = planAnchor(), step = +d.planNav;
+    if (S.planMode === 'week') S.planDate = fromDay(toDay(a) + 7 * step);
+    else {
+      const [y, m] = a.split('-').map(Number);
+      S.planDate = `${new Date(y, m - 1 + step, 1).getFullYear()}-${String(new Date(y, m - 1 + step, 1).getMonth() + 1).padStart(2, '0')}-01`;
+    }
+    S.calDay = S.today >= planRange()[0] && S.today <= planRange()[1] ? S.today : planRange()[0];
     return render();
   }
+  if (d.pickDay) { S.calDay = d.pickDay; return render(); }
+  if (d.statMode) { S.statMode = d.statMode; return render(); }
+  if (d.reopen) {
+    const c = S.dayComps.find((x) => x.id === d.reopen);
+    return c ? void reopen(d.reopen, c.title) : undefined;
+  }
+  if (d.avatar) return patchMe({ avatar: d.avatar });
   if (d.me) { S.me = d.me; ls.set('me', d.me); return render(); }
   if (d.themeSet) { setTheme(d.themeSet); return render(); }
   if (d.edit !== undefined && el.matches('[data-edit]')) return openEditor(d.edit);
@@ -1081,6 +1332,7 @@ app.addEventListener('click', (e) => {
     case 'export': return exportData();
     case 'save-backup': return saveBackup();
     case 'import': $('#importFile').click(); return;
+    case 'photo': $('#photoFile').click(); return;
     case 'badge':
       Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});
       return;
@@ -1117,10 +1369,19 @@ app.addEventListener('change', (e) => {
   const d = el.dataset;
   if (d.action === 'toggle') return toggle(el);
   if (d.action === 'toggle-rule') return toggleRule(el);
-  if (d.action === 'plan') { ls.set('plan', el.checked ? '1' : null); return render(); }
   if (d.action === 'toggle-step') return toggleStep(el);
   if (d.switch === 'vibrate') { ls.set('vibrate', el.checked ? null : '0'); if (el.checked) haptic(); return; }
+  if (d.switch === 'badge') {
+    ls.set('badge', el.checked ? null : '0');
+    lastBadge = -1;
+    if (el.checked && Notification?.permission === 'default') {
+      Notification.requestPermission().catch(() => {}).finally(() => { lastBadge = -1; render(); });
+      return;
+    }
+    return render();
+  }
   if (el.id === 'importFile') return importFile(el);
+  if (el.id === 'photoFile') return setPhoto(el);
   if (d.personName !== undefined) {
     const name = el.value.trim();
     if (!name) return render();
@@ -1149,35 +1410,42 @@ app.addEventListener('change', (e) => {
   }
 });
 
-// Wischen nach rechts = abhaken (Zeilen mit data-swipe; senkrechtes Scrollen bleibt frei)
+// Wischen in beide Richtungen = abhaken bzw. wieder öffnen (Zeilen mit data-swipe; senkrechtes Scrollen bleibt frei)
 let swipe = null, swallowClick = false;
 app.addEventListener('pointerdown', (e) => {
   const row = e.target.closest('.item[data-swipe]');
-  swipe = row && e.isPrimary ? { row, x: e.clientX, y: e.clientY, dx: 0, active: false } : null;
+  swipe = row && e.isPrimary ? { row, bg: row.previousElementSibling, x: e.clientX, y: e.clientY, dx: 0, active: false } : null;
 });
 app.addEventListener('pointermove', (e) => {
   if (!swipe) return;
   const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
   if (!swipe.active) {
     if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; }
-    if (dx < 12) return;
+    if (Math.abs(dx) < 12) return;
     swipe.active = true;
     swipe.row.classList.add('dragging');
   }
-  swipe.dx = Math.max(0, dx);
-  swipe.row.style.transform = `translateX(${swipe.dx}px)`;
+  swipe.dx = dx;
+  swipe.row.style.transform = `translateX(${dx}px)`;
+  swipe.bg.classList.toggle('left', dx < 0);
+  swipe.bg.style.opacity = Math.min(1, Math.abs(dx) / 60);
 });
 function endSwipe() {
   if (!swipe) return;
-  const { row, dx, active } = swipe;
+  const { row, bg, dx, active } = swipe;
   swipe = null;
   if (!active) return;
   swallowClick = true;
   setTimeout(() => { swallowClick = false; }, 300);
   row.classList.remove('dragging');
   row.style.transform = '';
-  const input = row.querySelector('input[data-action="toggle"]');
-  if (dx > Math.min(100, row.offsetWidth * 0.3) && input && !input.checked) { input.checked = true; toggle(input); }
+  bg.style.opacity = '';
+  if (Math.abs(dx) <= Math.min(100, row.offsetWidth * 0.3)) return;
+  const input = row.querySelector('input[data-action="toggle"], input[data-action="toggle-rule"]');
+  if (!input || input.disabled) return;
+  row.classList.toggle('toleft', dx < 0);
+  input.checked = !input.checked;
+  (input.dataset.action === 'toggle' ? toggle : toggleRule)(input);
 }
 app.addEventListener('pointerup', endSwipe);
 app.addEventListener('pointercancel', endSwipe);
@@ -1325,5 +1593,4 @@ function closeEditor() {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!sheet.hidden) closeEditor();
-  else if (S.calDay) { S.calDay = null; render(); }
 });
