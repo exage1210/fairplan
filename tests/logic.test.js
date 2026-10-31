@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { TEMPLATE, TEMPLATE_RULES, suggestTasks, suggestRules, OUR_TASKS, OUR_RULES, AREAS, QUESTIONS } from '../js/template.js';
 import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
-  packageOwners, inSeason, windowsBetween, awayDuring,
+  packageOwners, rotationBase, swapCount, nextSwap, ownerNow, inSeason, windowsBetween, awayDuring,
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, streaks,
 } from '../js/logic.js';
 
@@ -358,4 +358,76 @@ test('Vorschlag: ohne Antworten nur der Kern, Antworten wählen Passendes vor', 
   assert.equal(TEMPLATE.find((t) => t.title === 'Wäsche').min, 60); // Vorlage bleibt unverändert
   const all = QUESTIONS.map((q) => q[0]);
   assert.equal(on(all).length, TEMPLATE.filter((t) => !t.soft).length);
+});
+
+// Tausch: Start 15.10.2026, erster Tausch am 1.11. (ab November)
+const rot = (over = {}) => ctx({ setup: '2026-10-15', rotateFrom: '2026-10', ...over });
+const rotTask = (over = {}) => task({ assign: 'A', created: '2026-10-15', ...over });
+
+test('Tausch: ohne rotateFrom bleibt alles fix', () => {
+  assert.equal(ownerNow(rotTask(), ctx({ setup: '2026-10-15' }), '2026-12-07'), 'p1');
+  assert.equal(swapCount(ctx(), '2026-12-07'), 0);
+  assert.equal(nextSwap(ctx(), '2026-12-07'), null);
+});
+
+test('Tausch: Beginn übersprungen, wenn der Start knapp vor dem Monatsersten liegt', () => {
+  assert.equal(rotationBase('2026-10-31'), '2026-11');
+  assert.equal(rotationBase('2026-10-19'), '2026-11'); // 13 Tage vor dem 1.11.
+  assert.equal(rotationBase('2026-10-18'), '2026-10'); // genau 14 Tage
+  assert.equal(rotationBase('2026-12-20'), '2027-01');
+  assert.equal(nextSwap({ rotateFrom: rotationBase('2026-10-31') }, '2026-10-31'), '2026-12-01');
+  assert.equal(nextSwap({ rotateFrom: '2026-11' }, '2026-12-01'), '2027-01-01');
+  assert.equal(swapCount({ rotateFrom: '2026-11' }, '2026-11-20'), 0);
+  assert.equal(swapCount({ rotateFrom: '2026-11' }, '2027-01-02'), 2);
+});
+
+test('Tausch: Pakete tauschen monatlich, bei mehr Personen reihum', () => {
+  const m = rotTask({ n: 1, unit: 'month' });
+  assert.deepEqual(['2026-10-20', '2026-11-20', '2026-12-20', '2027-01-20'].map((d) => ownerNow(m, rot(), d)), ['p1', 'p2', 'p1', 'p2']);
+  assert.equal(ownerNow(rotTask({ n: 1, unit: 'month', assign: 'B' }), rot(), '2026-11-20'), 'p1');
+  const three = { persons: [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }] };
+  assert.deepEqual([0, 1, 2, 3].map((n) => packageOwners(three, n)), [['p1', 'p2'], ['p2', 'p3'], ['p3', 'p1'], ['p1', 'p2']]);
+});
+
+test('Tauschtag: zuständig bleibt, wer zu Beginn der Periode dran war', () => {
+  const w = rotTask();
+  assert.equal(ownerNow(w, rot(), '2026-11-29'), 'p2'); // Woche ab 23.11.
+  assert.equal(ownerNow(w, rot(), '2026-12-01'), 'p2'); // Woche ab 30.11. begann im November
+  assert.equal(ownerNow(w, rot(), '2026-12-06'), 'p2');
+  assert.equal(ownerNow(w, rot(), '2026-12-07'), 'p1'); // erste Woche, die im Dezember beginnt
+  const q = rotTask({ n: 3, unit: 'month' });
+  assert.deepEqual(['2026-10-20', '2026-12-31', '2027-01-05', '2027-04-05'].map((d) => ownerNow(q, rot(), d)), ['p1', 'p1', 'p2', 'p1']);
+});
+
+test('Tausch: verpasste Aufgabe bleibt bei der Person, die sie verpasst hat', () => {
+  const w = rotTask();
+  const it = one(w, rot(), '2026-12-08'); // Woche ab 30.11. (p2) nicht erledigt
+  assert.equal(it.status, 'overdue');
+  assert.equal(it.owner, 'p2');
+  assert.equal(ownerNow(w, rot(), '2026-12-08'), 'p1');
+});
+
+test('Tausch: halbjährlich und jährlich wechseln je Durchgang', () => {
+  const c = rot({ setup: '2026-10-15', rotateFrom: '2026-10' });
+  const h = rotTask({ n: 6, unit: 'month' });
+  assert.deepEqual(['2026-11-20', '2027-03-20', '2027-09-20', '2028-03-20'].map((d) => ownerNow(h, c, d)), ['p1', 'p2', 'p1', 'p2']);
+  const y = rotTask({ n: 12, unit: 'month' });
+  assert.deepEqual(['2026-11-20', '2027-03-20', '2027-11-20', '2028-02-20'].map((d) => ownerNow(y, c, d)), ['p1', 'p2', 'p2', 'p1']);
+  const b = rotTask({ n: 6, unit: 'month', assign: 'B' });
+  assert.equal(ownerNow(b, c, '2026-11-20'), 'p2'); // Paket B beginnt bei der anderen Person
+});
+
+test('Fix bei Person: tauscht nicht mit, zählt aber in die Zeit', () => {
+  const f = rotTask({ fixed: true, assign: 'B', min: 30 });
+  assert.deepEqual(['2026-10-20', '2026-11-20', '2026-12-20'].map((d) => ownerNow(f, rot(), d)), ['p2', 'p2', 'p2']);
+  assert.ok(loadByPerson([f], rot()).p2 > 0);
+  assert.equal(ownerNow(rotTask({ assign: 'shared' }), rot(), '2026-11-20'), null);
+});
+
+test('Vorlage: Seltenes mit Person, gemeinsam nur Ausmisten und Bei Bedarf', () => {
+  const split = autoSplit(OUR_TASKS);
+  const shared = split.filter((t) => t.assign === 'shared').map((t) => t.title).sort();
+  assert.deepEqual(shared, ['Abflüsse reinigen', 'Ausmisten', 'Gefrierschrank abtauen', 'Mistkübel auswaschen']);
+  const halves = split.filter((t) => t.n === 6 && t.unit === 'month');
+  assert.ok(halves.some((t) => t.assign === 'A') && halves.some((t) => t.assign === 'B'));
 });
