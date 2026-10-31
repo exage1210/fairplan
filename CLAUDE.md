@@ -82,7 +82,9 @@ Gilt vor älteren Einträgen oben („Kein Pakettausch“ ist überholt, wo die 
 - `ownerOf` zählt die Tausche am Beginn der Periode (`turnsOf`): Wer dort zuständig ist, bleibt es bis zum Ende; die Woche um den 1. gehört also noch dem alten Monat. Intervalle mit gerader Monatszahl (halbjährlich, jährlich) wechseln stattdessen je Durchgang. `packageOwners(ctx, turns)` rotiert reihum.
 - `task.fixed` (mit `assign` A/B): tauscht nicht mit, im Editor „Fix bei <Person>“ (Wert `fix-A`/`fix-B` nur im Formular). Zählt weiter in `loadByPerson`.
 - `loadByPerson` bleibt pro Paket gerechnet: bei Tausch stimmt die Zeit nur im Schnitt. `autoSplit` läuft nur beim Einrichten, „Fix“ gleicht sich nicht von selbst aus.
-- Hinweise: Statuskarte 3 Tage vorher „Tausch am …“; „Getauscht! Du hast jetzt: …“ einmal pro Monat und Gerät (`fairplan.swap-seen`), nennt das Wöchentliche und „N weitere“, ohne Halbjährliches/Jährliches.
+- Hinweise: Statuskarte 3 Tage vorher „Tausch am …“; „Getauscht! Was schon läuft, machst du noch fertig. Danach hast du: …“ einmal pro Monat und Gerät (`fairplan.swap-seen`), nennt das Wöchentliche und „N weitere“, ohne Halbjährliches/Jährliches.
+- Schalter (v34) auch in der Aufteilung (`st.rotate`): an, außer `rotateFrom === null` (bewusst aus); fehlt der Wert (alter Haushalt), gilt beim Neu-Einrichten „an“. Datum in Hinweisen ans Satzende, `fmtDate` endet je nach Jahr mit oder ohne Punkt.
+- Geplant, nicht gebaut: persönliche Woche ab dem Putztag für wöchentlich und alle 2 Wochen, ohne Spielraum; Balken und „Ganzer Monat“ ebenso, Statistik und Plan bleiben beim Kalender (Vault-Log 31.10.).
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
