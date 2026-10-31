@@ -628,6 +628,41 @@ export function dueBetween(tasks, ctx, fromStr, toStr, doneById, me) {
   return out;
 }
 
+// ---------- Gemeinsames Ziel ----------
+
+export const goalOf = (ctx) => ({ percent: 90, reward: '', ...ctx.goal });
+
+// Monat 'YYYY-MM': alle Termine des Monats beider Personen, ohne Tägliches und Abmachungen. Pausiertes fällt raus,
+// solange es nicht erledigt ist. Liefert { total, done, percent, lastEnd }; percent abgerundet, lastEnd = letzte Frist.
+export function goalStats(tasks, ctx, month, doneById) {
+  const [y, m] = month.split('-').map(Number);
+  const from = fromDay(dayOf(y, m, 1)), to = fromDay(dayOf(y, m + 1, 1) - 1);
+  let total = 0, done = 0, lastEnd = '';
+  for (const task of tasks) {
+    if (kindOf(task) === 'daily') continue;
+    for (const w of windowsBetween(task, ctx, from, to)) {
+      if (w.start < from) continue;
+      const hit = doneById.has(completionId(task.id, w.key, w.slot));
+      if (!hit && paused(ctx, w.owner, toDay(w.start), toDay(w.end))) continue;
+      total++;
+      if (hit) done++;
+      if (w.end > lastEnd) lastEnd = w.end;
+    }
+  }
+  return { total, done, percent: total ? Math.floor((done * 100) / total) : 0, lastEnd };
+}
+
+// Ergebnis des Vormonats: reached, sobald die Quote stimmt; settled, wenn die letzte Frist vorbei ist.
+// Der Startmonat zählt nur mit mindestens 14 Tagen Laufzeit (wie beim Tausch), sonst null.
+export function goalResult(tasks, ctx, todayStr, doneById) {
+  const prevDay = monthStart(monthIndex(toDay(todayStr))) - 1;
+  const month = fromDay(prevDay).slice(0, 7);
+  if (prevDay - toDay(ctx.setup) < 13) return null;
+  const s = goalStats(tasks, ctx, month, doneById);
+  if (!s.total) return null;
+  return { month, ...s, reached: s.done * 100 >= goalOf(ctx).percent * s.total, settled: todayStr > s.lastEnd };
+}
+
 // Serie: Tage in Folge mit mindestens einer eigenen Erledigung. Heute darf noch fehlen,
 // Abwesenheit unterbricht nicht. days: Liste von 'YYYY-MM-DD'.
 export function streaks(days, todayStr, isAway = () => false) {

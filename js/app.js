@@ -3,9 +3,10 @@ import {
   localToday, toDay, fromDay, windowsBetween, awayDuring,
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
+  goalOf, goalStats, goalResult,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
-import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED } from './template.js';
+import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED, GOAL_REWARDS } from './template.js';
 
 // ---------- Konstanten & Hilfen ----------
 
@@ -32,7 +33,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.36';
+const APP_VERSION = '2.0.37';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -579,13 +580,16 @@ function viewToday() {
   const allDone = !now.length && x > 0;
   const me = person(S.me);
   const swap = nextSwap(S.hh, S.today);
+  const goal = goalOf(S.hh);
+  const goalNow = goalStats(S.tasks, S.hh, S.today.slice(0, 7), doneMap());
 
-  const card = `${swapNote()}<section class="card ${allDone ? 'alldone' : ''}">
+  const card = `${goalNote()}${swapNote()}<section class="card ${allDone ? 'alldone' : ''}">
       <div><span class="card-label">Deine Aufgaben heute</span>
         <span class="card-big">${x}<small> / ${y}</small></span></div>
       ${weekAll || bonus ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus ? `<span class="pill">+${bonus} extra</span>` : ''}</div>
         ${weekAll ? `<div class="bar"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div>` : ''}</div>` : ''}
       <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : pressing.length ? `Noch ${pressing.length} offen` : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.'}</span>
+      ${goalNow.total ? `<span class="card-next">Gemeinsam: ${goalNow.percent} % von ${goal.percent} %${goal.reward ? ` · ${esc(goal.reward)}` : ''}</span>` : ''}
       ${next ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
       ${swap && toDay(swap) - toDay(S.today) <= 3 ? `<span class="card-next">Tausch am ${fmtDate(swap)}</span>` : ''}
       <hr>
@@ -633,6 +637,22 @@ function kindBar() {
 }
 
 // Hinweis nach dem Tausch: einmal pro Monat und Gerät, zum Wegtippen
+// Monatsergebnis: einmal pro Monat und Gerät. Erreichtes bleibt im Haushalt mit der damaligen Belohnung.
+function goalNote() {
+  const r = goalResult(S.tasks, S.hh, S.today, doneMap());
+  if (!r) return '';
+  const hits = S.hh.goalHits || {};
+  if (r.reached && hits[r.month] === undefined && S.goalSaved !== r.month) {
+    S.goalSaved = r.month;
+    updateHH({ goalHits: { ...hits, [r.month]: goalOf(S.hh).reward } });
+  }
+  const reached = r.reached || hits[r.month] !== undefined;
+  if ((!reached && !r.settled) || ls.get('goal-seen') === r.month) return '';
+  const reward = hits[r.month] ?? goalOf(S.hh).reward;
+  const text = !reached ? 'Neuer Monat, neues Ziel.' : `Geschafft! ${reward ? esc(reward) : 'Euer gemeinsames Ziel ist erreicht.'}`;
+  return `<button class="awaynote swapnote" data-action="goal-seen" style="--pc:var(--accent)">${text}</button>`;
+}
+
 function swapNote() {
   const turns = swapCount(S.hh, S.today);
   if (!turns || ls.get('swap-seen') === S.today.slice(0, 7)) return '';
@@ -857,6 +877,7 @@ function viewStats() {
   const months = [];
   for (let d = toDay(monthBounds(S.hh.setup)[0]); d < toDay(monthBounds(S.today)[0]); d = toDay(monthBounds(fromDay(d))[1]) + 1) months.push(monthBounds(fromDay(d)));
   const wholeMonth = months.slice(-24).some(([a, b]) => { const l = dueBetween(S.tasks, S.hh, a, b, byId, S.me); return l.length && l.every((w) => w.done); });
+  const goalHitCount = Object.keys(S.hh.goalHits || {}).length;
   const badges = [
     ['Erste Woche', sinceStart >= 7, left(sinceStart, 7), MILESTONES.check],
     ['7 Tage Serie', longest >= 7, left(longest, 7), MILESTONES.flame],
@@ -864,6 +885,7 @@ function viewStats() {
     ['30 Tage Serie', longest >= 30, left(longest, 30), MILESTONES.flame],
     ['100 extra', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
     ['Ganzer Monat', wholeMonth, wholeMonth ? 'geschafft' : 'läuft', MILESTONES.cal],
+    ['Gemeinsames Ziel', goalHitCount > 0, goalHitCount ? `${goalHitCount}× geschafft` : 'läuft', MILESTONES.star],
   ].map(([name, on, sub, path]) => `<div class="badge ${on ? 'on' : ''}"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg></i><b>${name}</b><small>${sub}</small></div>`).join('');
 
   const seg = [['week', 'Woche'], ['month', 'Monat'], ['year', 'Jahr']].map(([v, l]) => `<button data-stat-mode="${v}" aria-pressed="${S.statMode === v}">${l}</button>`).join('');
@@ -958,8 +980,23 @@ function viewHousehold() {
     : `<div class="mrow">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span></div>`)).join('');
   return `<h2>Personen</h2><div class="tile">${rows}</div>
     <span class="hint">Jede Person ändert Name und Farbe in ihrem eigenen Profil.</span>
-    <button class="addrow" data-go="code">${icon('plus', 18)}Person einladen</button>`;
+    <button class="addrow" data-go="code">${icon('plus', 18)}Person einladen</button>
+    <h2>Gemeinsames Ziel</h2>${goalBlock(goalOf(S.hh))}`;
 }
+
+// Ziel und Belohnung: gleiche Bausteine beim Einrichten und unter Mehr › Haushalt
+const goalBlock = (goal) => {
+  const own = GOAL_REWARDS.includes(goal.reward) ? '' : goal.reward;
+  return `<p class="small">Wie viel von allen Aufgaben des Monats schafft ihr zusammen? Abmachungen zählen nicht, Abwesenheit fällt raus.</p>
+    <div class="filters">${[80, 90, 100].map((n) => `<button data-goal-percent="${n}" aria-pressed="${goal.percent === n}">${n} %</button>`).join('')}</div>
+    <p class="small">Belohnung, wenn ihr es schafft (optional)</p>
+    <div class="filters">${GOAL_REWARDS.map((r) => `<button data-goal-reward="${r}" aria-pressed="${goal.reward === r}">${r}</button>`).join('')}</div>
+    <label class="field">Eigene Belohnung<input type="text" data-goal-text maxlength="40" value="${esc(own)}" autocomplete="off"></label>`;
+};
+const setGoal = (patch) => {
+  if (S.setup) { Object.assign(S.setup.goal, patch); return renderSetup(); }
+  updateHH({ goal: { ...goalOf(S.hh), ...patch } });
+};
 
 function viewCode() {
   return `<div class="qrwrap"><div class="qr" id="qr" aria-label="QR-Code zum Beitreten"></div>
@@ -1019,11 +1056,11 @@ const PICK_START = { mode: null, answers: [], pick: [], pickKey: null, openAreas
 function startSetup(reset = false) {
   S.setup = reset
     ? { step: 'persons', reset: true, persons: S.hh.persons.map((p) => ({ name: p.name, color: p.color, days: p.days?.length ? p.days : [5] })),
-      shared: S.hh.sharedDays?.length ? S.hh.sharedDays : [5], start: S.today,
+      shared: S.hh.sharedDays?.length ? S.hh.sharedDays : [5], start: S.today, goal: goalOf(S.hh),
       rotate: S.hh.rotateFrom !== null, // null = bewusst ausgeschaltet, fehlt = noch nie entschieden
       rules: (S.hh.rules || []).map((r) => RULE_RENAMED[r] || r).filter((r) => RULE_SUGGESTIONS.includes(r)), tasks: [], planRules: [], ...PICK_START, error: '' }
     : { step: 'start', persons: [{ name: '', color: 'violett', days: [5] }, { name: '', color: 'gruen', days: [5] }],
-      shared: [5], start: S.today, rotate: true, rules: [], tasks: [], planRules: [], ...PICK_START, error: '' };
+      shared: [5], start: S.today, goal: goalOf({}), rotate: true, rules: [], tasks: [], planRules: [], ...PICK_START, error: '' };
   renderSetup();
 }
 
@@ -1136,7 +1173,12 @@ function renderSetup() {
       <h2><i class="sw" style="--pc:var(--c-${st.persons[1].color})"></i>${names[1]}</h2><div class="rows">${list('B')}</div>
       <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und ${setupRules(true).length} Abmachungen.</p>
       ${err}
-      <div class="btnrow"><button class="btn" data-setup="${{ our: 'template', suggest: 'areas', empty: 'rules' }[st.mode]}">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
+      <div class="btnrow"><button class="btn" data-setup="${{ our: 'template', suggest: 'areas', empty: 'rules' }[st.mode]}">Zurück</button><button class="btn primary" data-setup="to-goal">Weiter</button></div>`;
+  } else if (st.step === 'goal') {
+    body = `<h2>Euer gemeinsames Ziel</h2>
+      ${goalBlock(st.goal)}
+      <p class="small">Später änderbar unter Mehr › Haushalt.</p>${err}
+      <div class="btnrow"><button class="btn" data-setup="back-split">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
   } else if (st.step === 'rules') {
     body = `<h2>Abmachungen</h2>
       <p class="small">Selbstverständliches für jeden Tag – für beide abhakbar, nie „offen“. Später in den Optionen änderbar.</p>
@@ -1176,6 +1218,7 @@ async function createHousehold(withTemplate) {
     ...DEFAULT_HOUSEHOLD,
     setup: st.start,
     rotateFrom: st.rotate ? rotationBase(st.start) : null,
+    goal: st.goal,
     sharedDays: st.shared,
     persons: setupPersons(),
     rules: setupRules(withTemplate),
@@ -1205,7 +1248,7 @@ function resetPlan(withTemplate) {
   const persons = S.hh.persons.map((p, i) => ({ ...p, ...setupPersons()[i], id: p.id }));
   for (const t of S.tasks) S.store.deleteTask(S.code, t.id);
   for (const t of setupTasks(withTemplate)) S.store.saveTask(S.code, t);
-  updateHH({ persons, sharedDays: st.shared, rules: [...setupRules(withTemplate), ...ownRules().filter((r) => !RULE_RENAMED[r])], setup: st.start, rotateFrom: st.rotate ? rotationBase(st.start) : null, swapped: false });
+  updateHH({ persons, sharedDays: st.shared, rules: [...setupRules(withTemplate), ...ownRules().filter((r) => !RULE_RENAMED[r])], setup: st.start, rotateFrom: st.rotate ? rotationBase(st.start) : null, goal: st.goal, swapped: false });
   S.setup = null;
   S.view = 'heute';
   S.stack = [];
@@ -1505,6 +1548,11 @@ app.addEventListener('click', (e) => {
     const persons = S.hh.persons.map((p, i) => (i === +d.personColor ? { ...p, color: d.color } : p));
     return updateHH({ persons });
   }
+  if (d.goalPercent) return setGoal({ percent: +d.goalPercent });
+  if (d.goalReward) {
+    const cur = S.setup ? S.setup.goal.reward : goalOf(S.hh).reward;
+    return setGoal({ reward: cur === d.goalReward ? '' : d.goalReward });
+  }
   if (d.setupColor) { S.setup.persons[+d.setupColor].color = d.color; return renderSetup(); }
   if (d.setupRule) { S.setup.rules = toggled(S.setup.rules, d.setupRule); return renderSetup(); }
   if (d.setupQ) { S.setup.answers = toggled(S.setup.answers, d.setupQ); return renderSetup(); }
@@ -1539,6 +1587,7 @@ app.addEventListener('click', (e) => {
   if (d.setup) return setupAction(d.setup);
   switch (d.action) {
     case 'swap-seen': ls.set('swap-seen', S.today.slice(0, 7)); return render();
+    case 'goal-seen': ls.set('goal-seen', goalResult(S.tasks, S.hh, S.today, doneMap())?.month ?? null); return render();
     case 'rule-add': S.addRule = true; render(); $('#newRule')?.focus(); return;
     case 'rule-done': addOwnRule(false); S.addRule = false; document.activeElement?.blur(); return render();
     case 'copy': return copyCode();
@@ -1597,7 +1646,9 @@ function setupAction(a) {
       st.tasks = autoSplit(pickedTasks().map(({ on, soft, ...t }) => t));
       st.step = 'split';
     }
-  } else if (a === 'template') {
+  } else if (a === 'to-goal') st.step = 'goal';
+  else if (a === 'back-split') st.step = 'split';
+  else if (a === 'template') {
     if (st.persons.some((p) => !p.name.trim())) st.error = 'Bitte beide Namen eingeben.';
     else st.step = 'template';
   } else if (a === 'create-template' || a === 'create-empty') {
@@ -1664,6 +1715,7 @@ app.addEventListener('change', (e) => {
   if (d.action === 'toggle') return toggle(el);
   if (d.action === 'toggle-rule') return toggleRule(el);
   if (d.action === 'toggle-step') return toggleStep(el);
+  if (d.goalText !== undefined && !S.setup) return setGoal({ reward: el.value.trim() });
   if (d.switch === 'setup-rotate') { S.setup.rotate = el.checked; return renderSetup(); }
   if (d.switch === 'rotate') return updateHH({ rotateFrom: el.checked ? rotationBase(S.today) : null });
   if (d.switch === 'vibrate') { ls.set('vibrate', el.checked ? null : '0'); if (el.checked) haptic(); return; }
@@ -1752,6 +1804,11 @@ app.addEventListener('toggle', (e) => {
 
 app.addEventListener('input', (e) => {
   const d = e.target.dataset;
+  // Beim Einrichten nicht neu zeichnen: Der Tipp auf „Haushalt anlegen“ ginge sonst beim Verlassen des Felds verloren
+  if (d.goalText !== undefined && S.setup) {
+    S.setup.goal.reward = e.target.value.trim();
+    for (const b of app.querySelectorAll('[data-goal-reward]')) b.setAttribute('aria-pressed', b.dataset.goalReward === S.setup.goal.reward);
+  }
   if (d.pickMin !== undefined) { S.setup.pick[+d.pickMin].min = clampMin(e.target.value); $('#pickTotal').textContent = pickTotal(); }
   if (d.setupName !== undefined) {
     const p = S.setup.persons[+d.setupName];

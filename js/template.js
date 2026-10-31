@@ -106,6 +106,9 @@ export const TEMPLATE = [
   t('Mistkübel auswaschen', N, 'kueche', 10, { perMonth: 1 }),
 ];
 
+// Vorschläge für die Belohnung beim gemeinsamen Ziel
+export const GOAL_REWARDS = ['Pizza-Abend', 'Essen gehen', 'Kinoabend', 'Ausflug', 'Ausschlafen', 'Wellness-Tag'];
+
 // Abmachungen: Selbstverständliches, täglich für beide abhakbar (nie „offen“)
 export const TEMPLATE_RULES = [
   'Geschirr und Küche',
