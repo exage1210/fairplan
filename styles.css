@@ -540,3 +540,6 @@ details.more[open] > summary::after { content: " ▾"; }
   position: sticky; bottom: 8px; z-index: 2; margin-top: 12px; padding: 12px 14px; border-radius: var(--r);
   background: var(--accent); color: var(--accent-on); font-size: 14px; font-weight: 600; text-align: center;
 }
+
+/* Hinweis nach dem Tausch */
+.swapnote { display: block; width: 100%; margin-top: 18px; border: 0; color: var(--fg); text-align: left; cursor: pointer; }

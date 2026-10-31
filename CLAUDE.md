@@ -71,10 +71,18 @@ Etappen 1–6 gesammelt gebaut; Etappe 7 (Einrichtung neu) kommt extra. Gilt vor
 ## Neue Vorlage (31.10.2026, v31, Runde 1; Vault-Notizen „Vorlage“ und „Unser Plan“)
 Gilt vor älteren Einträgen oben, wo sie sich widersprechen.
 - Einrichtung, Schritt Vorlage (v32): „Daniel und Sabrina“ (`OUR_TASKS`, nur solange wir testen, vor Verkauf entfernen) geht direkt zur Aufteilung. „Vorschlag“: Fragen (`QUESTIONS`) → Bereiche-Auswahl mit `suggestTasks(answers)` vorausgewählt → Aufteilung. „Leer starten“: Bereiche-Auswahl ohne Auswahl → Abmachungen → Aufteilung (ohne Aufgaben direkt anlegen). `st.pick` hält die Auswahl (`on`), `area` bleibt an der Aufgabe, `when`, `soft`, `on` werden beim Anlegen entfernt. Bügeln verlängert nur die Wäsche (90 Min.); `soft` = bei passender Antwort nur angeboten (Katzenklo, Käfig/Aquarium). Rhythmuswechsel in der Auswahl setzt die Zuteilung nach `defaultAssign`.
-- Aufteilung nach Zeit (`autoSplit`): von häufig nach selten wird jedes Intervall so geteilt, dass der bisherige Unterschied möglichst klein wird; bei gleichem Ergebnis gewinnt die gleichmäßigere Anzahl. Die Anzahl pro Person kann deshalb deutlich abweichen. Halbjährliches, Jährliches und Bei Bedarf sind gemeinsam, „Gewand ausmisten“ pro Person.
+- Aufteilung nach Zeit (`autoSplit`): von häufig nach selten wird jedes Intervall so geteilt, dass der bisherige Unterschied möglichst klein wird; bei gleichem Ergebnis gewinnt die gleichmäßigere Anzahl. Die Anzahl pro Person kann deshalb deutlich abweichen. Bei Bedarf und „Ausmisten“ sind gemeinsam, „Gewand ausmisten“ pro Person (seit v33, siehe Rotation).
 - Saison optional mit zweitem Zeitraum (`from2`, `to2`), im Editor unter „Mehr“; Fenster putzen und Gewand tauschen März–Mai und Sep–Nov. `timesPerMonth` zählt bei Monatsintervallen die Perioden mit Saisonmonat (jährlich mit Saison bleibt 1× pro Jahr).
 - Abmachungen: Umbenannte Vorschläge in `RULE_RENAMED`; bestehende Haushalte behalten den alten Text, bei „Plan neu einrichten“ wird er ersetzt.
 - „+N extra“ statt „Bonus“ überall in der Oberfläche; Erklärzeilen unter Abmachungen und Bei Bedarf.
+
+## Rotation (31.10.2026, v33; Vault-Notiz „Prompt Rotation“)
+Gilt vor älteren Einträgen oben („Kein Pakettausch“ ist überholt, wo die Rotation eingeschaltet ist).
+- `rotateFrom` im Haushalt ('YYYY-MM'): ab dem Monat danach tauschen die Pakete am 1.; `null`/fehlt = aus (bestehende Haushalte, bis der Schalter „Monatlich tauschen“ unter Mehr › Aufgaben an ist oder der Plan neu eingerichtet wird). `rotationBase`: Start weniger als 14 Tage vor dem Monatsersten überspringt diesen Tausch. Schalter aus und wieder ein beginnt die Zählung neu, Paket A ist dann wieder bei Person 1.
+- `ownerOf` zählt die Tausche am Beginn der Periode (`turnsOf`): Wer dort zuständig ist, bleibt es bis zum Ende; die Woche um den 1. gehört also noch dem alten Monat. Intervalle mit gerader Monatszahl (halbjährlich, jährlich) wechseln stattdessen je Durchgang. `packageOwners(ctx, turns)` rotiert reihum.
+- `task.fixed` (mit `assign` A/B): tauscht nicht mit, im Editor „Fix bei <Person>“ (Wert `fix-A`/`fix-B` nur im Formular). Zählt weiter in `loadByPerson`.
+- `loadByPerson` bleibt pro Paket gerechnet: bei Tausch stimmt die Zeit nur im Schnitt. `autoSplit` läuft nur beim Einrichten, „Fix“ gleicht sich nicht von selbst aus.
+- Hinweise: Statuskarte 3 Tage vorher „Tausch am …“; „Getauscht! Du hast jetzt: …“ einmal pro Monat und Gerät (`fairplan.swap-seen`), nennt das Wöchentliche und „N weitere“, ohne Halbjährliches/Jährliches.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
