@@ -544,3 +544,15 @@ details.more[open] > summary::after { content: " ▾"; }
 /* Hinweis nach dem Tausch */
 .swapnote { display: block; width: 100%; margin-top: 18px; border: 0; color: var(--fg); text-align: left; cursor: pointer; }
 .jokerbtn { display: block; margin-top: 6px; padding: 4px 10px; border: 0; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600; background: var(--accent-soft); color: var(--accent-text); cursor: pointer; }
+.star.draw path { stroke-dasharray: 1; animation: stardraw 0.7s ease-out both; }
+@keyframes stardraw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.card.pulse { animation: cardpulse 0.5s ease-out; }
+@keyframes cardpulse { 50% { transform: scale(1.015); } }
+#fx { position: fixed; left: 50%; top: 38%; z-index: 60; transform: translate(-50%, -50%); width: min(280px, 80vw); padding: 24px 20px; border: 1px solid var(--line-strong); border-radius: var(--r-lg); background: var(--surface); color: var(--fg); font: inherit; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; cursor: pointer; animation: fxin 1.4s ease-out both; }
+#fx .star { width: 72px; height: 72px; }
+#fx b { font-size: 17px; font-weight: 600; }
+@keyframes fxin { 0% { opacity: 0; } 10%, 85% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .star.draw path, .card.pulse, .cheer.pop { animation: none; stroke-dasharray: none; }
+  #fx { animation: none; }
+}

@@ -100,7 +100,6 @@ Gilt vor älteren Einträgen oben, wo sie sich widersprechen (Spielraum, Tauscht
 - `goalResult` (Vormonat): `reached` = Quote erreicht, `settled` = letzte Frist vorbei (Termine laufen bis in den neuen Monat). Hinweis einmal pro Monat und Gerät (`fairplan.goal-seen`): „Geschafft! …“ sobald erreicht, „Neuer Monat, neues Ziel.“ erst nach der letzten Frist. Startmonat zählt nur mit mindestens 14 Tagen.
 - `goalHits` im Haushalt `{ 'YYYY-MM': Belohnung }` hält Erreichtes fest, auch nach „Plan neu einrichten“. Meilenstein „Gemeinsames Ziel“ liest das.
 - Beim Einrichten zeichnet das Textfeld nicht neu (`input` statt `change`), sonst ginge der Tipp auf „Haushalt anlegen“ beim Verlassen des Felds verloren.
-- Noch offen laut Vault: Runde 3 Statistik und Stern.
 
 ## Joker (31.10.2026, v38; Runde 2)
 - `joker_<personId>` im Haushalt `{ progress, count, earned, deferred: { <completionId des Termins>: Tag } }`, jede Person schreibt nur ihr Feld. 30 eigene Abmachungen = 1 Joker (`JOKER_PRICE`), höchstens 3 (`JOKER_MAX`), bei vollem Vorrat zählt nichts weiter. Frühere Abmachungen zählen nicht. Abmachung zurücknehmen rechnet zurück (`countRule`).
@@ -108,6 +107,13 @@ Gilt vor älteren Einträgen oben, wo sie sich widersprechen (Spielraum, Tauscht
 - `item.termKey` = Termin, `item.key` = wohin der Haken zählt. Wöchentlich läuft die neue Runde schon: Der Eintrag bleibt beim Termin mit Joker (auch über den Tausch bei derselben Person), ein Haken zählt für die laufende Runde.
 - Ziel und Balken: Verschobenes fällt raus, bis es erledigt ist; erledigt zählt es im Monat der neuen Frist. Drängt nicht (`isPressing`). Aktuell und Plan zeigen „verschoben“.
 - `earned` ist für den Meilenstein „Erster Joker“ in Runde 3.
+
+## Statistik und Stern (31.10.2026, v39; Runde 3)
+Gilt vor älteren Einträgen oben („Serie“ in Tagen, sechs Meilensteine, Tier bei „Alles erledigt“).
+- Serie in Wochen (`weekStreaks`): eigene Woche ab dem Putztag, zählt, wenn alle eigenen Termine erledigt sind. Ohne Termine (auch Abwesenheit, Joker) und solange eine Frist läuft: weder Bruch noch Zählung. Tägliches zählt nicht. Geurteilt wird nur ab `S.dayFrom`, auf „Aktuell“ daher „8+ Wochen“, bis die Statistik alles geladen hat.
+- 8 Meilensteine (`milestones`): Erster Haken, Erste Woche geschafft, 4 Wochen Serie, Ganzer Monat, 100 Aufgaben, 100 extra, Erster Joker, Gemeinsames Ziel. `stats_<personId>` im Haushalt `{ longest, done: { id: Tag }, start }` hält Erreichtes und die längste Serie, auch nach „Plan neu einrichten“.
+- `syncStats` schreibt nur bei Änderung und erst, wenn Erledigungen und Aufgaben geladen sind (`S.daysReady`). Beim ersten Mal still, danach Puls in der Statuskarte. `start` = Plan, für den der Stern „Der Anfang ist gemacht!“ schon kam; zählt nur eine Erledigung einer aktuellen Aufgabe.
+- `celebrate`: Einblendung `#fx` (1,4 s, Antippen schließt), Stern als Linie in Personenfarbe, bei geschafftem Ziel mit Verlauf aus beiden Farben (`fairplan.goal-star` einmal pro Gerät), beim Joker eigenes Symbol. „Alles erledigt“ zeigt den Stern statt des Tiers. „Bewegung reduzieren“ schaltet die Animationen ab.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
