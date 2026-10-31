@@ -6,6 +6,7 @@ import {
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, inSeason, windowsBetween, awayDuring,
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, streaks,
   personalWeek, isPressing, goalOf, goalStats, goalResult,
+  jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -641,4 +642,102 @@ test('Ziel: Startmonat zählt nur mit mindestens 14 Tagen, keine Aufgaben = kein
   assert.equal(goalResult([wk({ created: '2026-10-18' })], moSo({ setup: '2026-10-18', rotateFrom: null }), '2026-11-01', new Map()).month, '2026-10'); // 14 Tage
   assert.equal(goalResult([], moSo(), '2027-01-05', new Map()), null);
   assert.equal(goalResult([wk()], moSo(), '2026-10-05', new Map()), null); // vor dem Start
+});
+
+// ---------- Joker ----------
+
+const withJoker = (c, id, ...termIds) => ({ ...c, [`joker_${id}`]: { ...jokerOf({}, id), deferred: Object.fromEntries(termIds.map((t) => [t, '2026-11-01'])) } });
+
+test('Joker verdienen: 30 Abmachungen = 1, höchstens 3', () => {
+  let j = jokerOf({}, 'p1');
+  for (let i = 0; i < JOKER_PRICE - 1; i++) j = jokerTick(j, 1);
+  assert.deepEqual([j.progress, j.count], [29, 0]);
+  j = jokerTick(j, 1);
+  assert.deepEqual([j.progress, j.count, j.earned], [0, 1, 1]);
+  j = { ...j, count: JOKER_MAX, progress: 0 };
+  assert.deepEqual(jokerTick(j, 1), j); // voll: zählt nicht weiter
+});
+
+test('Joker: Abmachung zurücknehmen rechnet zurück, nie unter 0', () => {
+  let j = jokerTick({ ...jokerOf({}, 'p1'), progress: 29 }, 1);
+  assert.equal(j.count, 1);
+  j = jokerTick(j, -1);
+  assert.deepEqual([j.progress, j.count, j.earned], [29, 0, 0]);
+  assert.deepEqual(jokerTick(jokerOf({}, 'p1'), -1), jokerOf({}, 'p1'));
+});
+
+test('Joker wöchentlich: nicht rot, ein Eintrag bei der Person, ein Haken für beide Runden', () => {
+  const t = wk();
+  const c = withJoker(moSo(), 'p1', completionId('w', 'weekly:2026-11-02', null));
+  // Ohne Joker wäre der 9.11. rot
+  assert.equal(one(t, moSo(), '2026-11-09').status, 'overdue');
+  const it = one(t, c, '2026-11-09');
+  assert.deepEqual([it.status, it.owner, it.deferred, it.end, it.key], ['due', 'p1', true, '2026-11-15', 'weekly:2026-11-09']);
+  assert.equal(evaluate(t, c, '2026-11-09', new Map()).length, 1);
+  assert.equal(one(t, c, '2026-11-15').status, 'due');
+  // Danach rot, wie jede verpasste Runde
+  assert.equal(one(t, c, '2026-11-16').status, 'overdue');
+  assert.equal(one(t, c, '2026-11-12', [['weekly:2026-11-09', null]]).status, 'done');
+});
+
+test('Joker über den Tausch: bleibt bei der Person, Haken deckt die Runde der anderen ab', () => {
+  const t = wk();
+  const c = withJoker(moSo(), 'p1', completionId('w', 'weekly:2026-11-30', null));
+  const it = one(t, c, '2026-12-06', [['weekly:2026-11-23', null]]);
+  assert.deepEqual([it.status, it.owner, it.key, it.deferred], ['due', 'p1', 'weekly:2026-11-30b', true]);
+  assert.equal(one(t, c, '2026-12-06', [['weekly:2026-11-23', null], ['weekly:2026-11-30b', null]]).status, 'done');
+});
+
+test('Joker alle 2 Wochen und monatlich: Frist 7 Tage länger', () => {
+  const b = wk({ id: 'b', n: 2 });
+  const cb = withJoker(moSo({ rotateFrom: null }), 'p1', completionId('b', 'biweekly:2026-11-02', null));
+  assert.equal(one(b, cb, '2026-11-20').end, '2026-11-22');
+  assert.equal(one(b, cb, '2026-11-22').status, 'due');
+  assert.equal(one(b, cb, '2026-11-23').status, 'overdue');
+  const m = wk({ id: 'm', n: 1, unit: 'month', pos: 0 });
+  const cm = withJoker(moSo({ rotateFrom: null }), 'p1', completionId('m', 'monthly:2026-11-01', null));
+  assert.deepEqual([one(m, moSo({ rotateFrom: null }), '2026-11-08').status, one(m, moSo({ rotateFrom: null }), '2026-11-08').end], ['overdue', '2026-11-07']);
+  assert.deepEqual([one(m, cm, '2026-11-14').status, one(m, cm, '2026-11-14').end], ['due', '2026-11-14']);
+  assert.equal(one(m, cm, '2026-11-15').status, 'overdue');
+});
+
+test('Joker einsetzbar: nur bei eigener offener Aufgabe mit Person', () => {
+  const c = moSo();
+  const due = one(wk(), c, '2026-11-02');
+  assert.equal(canJoker(due, '2026-11-02'), true);
+  assert.equal(canJoker(one(wk(), c, '2026-11-09'), '2026-11-09'), true); // rot
+  assert.equal(canJoker({ ...due, status: 'upcoming' }, '2026-11-02'), false);
+  assert.equal(canJoker({ ...due, status: 'done' }, '2026-11-02'), false);
+  assert.equal(canJoker({ ...due, owner: null }, '2026-11-02'), false); // gemeinsam
+  assert.equal(canJoker({ ...due, deferred: true }, '2026-11-02'), false); // schon verschoben
+  assert.equal(canJoker({ ...due, task: wk({ n: 1, unit: 'day' }) }, '2026-11-02'), false);
+  assert.equal(canJoker({ ...due, task: wk({ n: 0, unit: 'need' }) }, '2026-11-02'), false);
+  assert.equal(canJoker({ ...due, status: 'overdue', end: '2026-10-20' }, '2026-11-02'), false); // neue Frist schon vorbei
+});
+
+test('Joker einsetzen: verbraucht einen, alte Merker fallen weg', () => {
+  const j = { ...jokerOf({}, 'p1'), count: 2, deferred: { alt: '2026-06-01', neu: '2026-10-20' } };
+  const n = useJoker(j, 'x', '2026-11-02');
+  assert.equal(n.count, 1);
+  assert.deepEqual(Object.keys(n.deferred).sort(), ['neu', 'x']);
+});
+
+test('Joker und Ziel: verschoben zählt erst, wenn erledigt, im Monat der neuen Frist', () => {
+  const t = wk({ fixed: true }); // p1, Mo 2./9./16./23./30.11.
+  const id = completionId('w', 'weekly:2026-11-30', null);
+  const c = withJoker(moSo(), 'p1', id);
+  assert.equal(goalStats([t], moSo(), '2026-11', new Map()).total, 5);
+  assert.equal(goalStats([t], c, '2026-11', new Map()).total, 4);
+  assert.equal(goalStats([t], c, '2026-12', new Map()).total, 4);
+  const m = new Map([[id, { by: 'p1' }]]);
+  const nov = goalStats([t], c, '2026-11', m), dec = goalStats([t], c, '2026-12', m);
+  assert.deepEqual([nov.total, dec.total, dec.done], [4, 5, 1]); // Frist 13.12.
+});
+
+test('Joker und Balken: verschoben fällt raus, drängt nicht', () => {
+  const t = wk({ fixed: true });
+  const c = withJoker(moSo(), 'p1', completionId('w', 'weekly:2026-11-09', null));
+  assert.equal(dueBetween([t], c, '2026-11-09', '2026-11-15', new Map(), 'p1').length, 0);
+  assert.equal(windowsBetween(t, c, '2026-11-09', '2026-11-15').find((w) => w.start === '2026-11-09').deferred, true);
+  assert.equal(isPressing(one(t, c, '2026-11-09', [['weekly:2026-11-02', null]]), '2026-11-09'), false);
 });
