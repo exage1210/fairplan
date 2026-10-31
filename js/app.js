@@ -4,7 +4,7 @@ import {
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
-import { TEMPLATE, TEMPLATE_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS } from './template.js';
+import { CORE_TASKS, CORE_RULES, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED } from './template.js';
 
 // ---------- Konstanten & Hilfen ----------
 
@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.30';
+const APP_VERSION = '2.0.31';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -94,7 +94,7 @@ const intervalLabel = (t) => {
   const day = Number.isInteger(t.day) ? ` · fest am ${WEEKDAYS[t.day]}` : '';
   return (k === 'custom' ? `Alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : KIND_LABEL[k]) + day;
 };
-const seasonLabel = (s) => `${MONTHS[s.from - 1]}–${MONTHS[s.to - 1]}`;
+const seasonLabel = (s) => `${MONTHS[s.from - 1]}–${MONTHS[s.to - 1]}${s.from2 != null ? `, ${MONTHS[s.from2 - 1]}–${MONTHS[s.to2 - 1]}` : ''}`;
 const rangeLabel = (a, b) => (a === b ? fmtDate(a) : `${fmtDate(a)}–${fmtDate(b)}`);
 const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const WEEKDAYS_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
@@ -554,7 +554,7 @@ function viewToday() {
   const bonusToday = doneRules.filter((r) => ruleDone(r).by === S.me).length;
   const doneToday = items.filter((i) => i.status === 'done' && i.completion?.day === S.today).sort(byOwnerRhythm);
 
-  // Statuskarte: heute x/y; Balken = Woche Mo–So mit Vergessenem; Abmachungen nur als Bonus daneben
+  // Statuskarte: heute x/y; Balken = Woche Mo–So mit Vergessenem; Abmachungen nur als „extra“ daneben
   const x = doneToday.filter((i) => i.completion.by === S.me && kindOf(i.task) !== 'asneeded').length;
   const y = x + now.length;
   const week = dueBetween(S.tasks, S.hh, mon, sun, doneMap(), S.me);
@@ -578,7 +578,7 @@ function viewToday() {
   const card = `<section class="card ${allDone ? 'alldone' : ''}">
       <div><span class="card-label">Deine Aufgaben heute</span>
         <span class="card-big">${x}<small> / ${y}</small></span></div>
-      ${weekAll || bonus ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus ? `<span class="pill">+${bonus} Bonus</span>` : ''}</div>
+      ${weekAll || bonus ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus ? `<span class="pill">+${bonus} extra</span>` : ''}</div>
         ${weekAll ? `<div class="bar"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div>` : ''}</div>` : ''}
       <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : now.length ? `Noch ${now.length} offen` : 'Heute ist nichts dran.'}</span>
       ${next ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
@@ -604,9 +604,9 @@ function viewToday() {
   ].sort((a, b) => a[0] - b[0]).map((r) => r[1]).join('');
 
   return `${card}
-    ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} Bonus</span>` : ''}`, `<div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
+    ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} extra</span>` : ''}`, `<p class="small">Erledigt ihr nebenbei, so wie abgemacht. Wird nicht aufgeteilt, zählt aber in deiner Statistik.</p><div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
     ${fold('tasks', head('Aufgaben', tasks.length), rows(tasks), true)}
-    ${need.length ? fold('need', head('Bei Bedarf', need.length), rows(need, () => '')) : ''}
+    ${need.length ? fold('need', head('Bei Bedarf', need.length), `<p class="small">Taucht nur auf, wenn ihr es braucht.</p>${rows(need, () => '')}`) : ''}
     ${others}
     ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.length), `<div class="list">${doneRows}</div>`) : ''}`;
 }
@@ -844,14 +844,14 @@ function viewStats() {
     ['7 Tage Serie', longest >= 7, left(longest, 7), MILESTONES.flame],
     ['100 Aufgaben', tasks.length >= 100, left(tasks.length, 100), MILESTONES.cup],
     ['30 Tage Serie', longest >= 30, left(longest, 30), MILESTONES.flame],
-    ['100 Bonus', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
+    ['100 extra', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
     ['Ganzer Monat', wholeMonth, wholeMonth ? 'geschafft' : 'läuft', MILESTONES.cal],
   ].map(([name, on, sub, path]) => `<div class="badge ${on ? 'on' : ''}"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg></i><b>${name}</b><small>${sub}</small></div>`).join('');
 
   const seg = [['week', 'Woche'], ['month', 'Monat'], ['year', 'Jahr']].map(([v, l]) => `<button data-stat-mode="${v}" aria-pressed="${S.statMode === v}">${l}</button>`).join('');
   return `<div class="seg">${seg}</div>
     <section class="card">
-      <div class="card-top"><div><span class="card-label">${P.label}</span><span class="card-big">${done}</span></div><span class="pill">+${bonus} Bonus</span></div>
+      <div class="card-top"><div><span class="card-label">${P.label}</span><span class="card-big">${done}</span></div><span class="pill">+${bonus} extra</span></div>
       <div class="bars">${bars}</div>
       <span class="card-open">${trend}</span>
     </section>
@@ -972,7 +972,7 @@ const viewRules = () => {
   ${S.addRule ? `<form id="ruleForm" class="addrule"><input type="text" id="newRule" maxlength="120" enterkeyhint="done" autocomplete="off" aria-label="Neue Abmachung" placeholder="z. B. Pflanzen am Fensterbrett gießen">
     <div class="btnrow"><button type="submit" class="btn primary">Hinzufügen</button><button type="button" class="btn" data-action="rule-done">Fertig</button></div></form>`
     : `<button class="addrow" data-action="rule-add">${icon('plus', 18)}Abmachung</button>`}
-  <span class="hint">Selbstverständliches für jeden Tag: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für alle ab. Nie offen, zählt als Bonus. „Pflanzen gießen bei Hitze“ erscheint nur von Juni bis August.</span>`;
+  <span class="hint">Selbstverständliches für jeden Tag: jeden Tag neu abhakbar, wer zuerst erledigt, hakt für alle ab. Nie offen, zählt als extra. „Pflanzen gießen bei Hitze“ erscheint nur von Juni bis August.</span>`;
 };
 
 const viewBackup = () => `<p class="small" style="margin-top:18px">Sichert Haushalt, Aufgaben und Verlauf in eine Datei (z. B. in „Dateien“). Einspielen ersetzt Aufgaben und Haushalts-Einstellungen durch die aus der Datei, der Verlauf bleibt und wird ergänzt.</p>
@@ -998,14 +998,16 @@ function startSetup(reset = false) {
   S.setup = reset
     ? { step: 'persons', reset: true, persons: S.hh.persons.map((p) => ({ name: p.name, color: p.color, days: p.days?.length ? p.days : [5] })),
       shared: S.hh.sharedDays?.length ? S.hh.sharedDays : [5], start: S.today,
-      rules: (S.hh.rules || []).filter((r) => RULE_SUGGESTIONS.includes(r)), tasks: [], error: '' }
+      rules: (S.hh.rules || []).map((r) => RULE_RENAMED[r] || r).filter((r) => RULE_SUGGESTIONS.includes(r)), tasks: [], planRules: [], error: '' }
     : { step: 'start', persons: [{ name: '', color: 'violett', days: [5] }, { name: '', color: 'gruen', days: [5] }],
-      shared: [5], start: S.today, rules: [], tasks: [], error: '' };
+      shared: [5], start: S.today, rules: [], tasks: [], planRules: [], error: '' };
   renderSetup();
 }
 
 const hours = (min) => (min / 60).toLocaleString('de-AT', { maximumFractionDigits: 1 });
 const setupCtx = () => ({ ...DEFAULT_HOUSEHOLD, setup: S.setup.start, persons: [{ id: 'p1' }, { id: 'p2' }] });
+// Stunden pro Woche für beide zusammen
+const weekHours = (tasks) => hours(Object.values(loadByPerson(tasks, setupCtx())).reduce((a, b) => a + b, 0) / 4.3);
 
 
 // Wochentage zum An-/Abwählen (Putztage)
@@ -1041,8 +1043,10 @@ function renderSetup() {
       <div class="btnrow"><button class="btn" data-setup="${st.reset ? 'cancel' : 'start'}">${st.reset ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
   } else if (st.step === 'template') {
     body = `<h2>Schritt 2 von 3 · Vorlage</h2>
-      <button class="choice" data-setup="split"><strong>Vorschlag 2-Personen-Haushalt</strong>
-        <span>${TEMPLATE.length} Aufgaben mit geschätzter Dauer, fair aufgeteilt und auf eure Putztage verteilt, dazu ${TEMPLATE_RULES.length} Abmachungen</span></button>
+      <button class="choice" data-setup="plan-our"><strong>Daniel und Sabrina</strong>
+        <span>Unser Plan: ${OUR_TASKS.length} Aufgaben, ca. ${weekHours(OUR_TASKS)} h pro Woche, dazu ${OUR_RULES.length} Abmachungen</span></button>
+      <button class="choice" data-setup="plan-core"><strong>Vorschlag 2-Personen-Haushalt</strong>
+        <span>${CORE_TASKS.length} Aufgaben, ca. ${weekHours(CORE_TASKS)} h pro Woche, fair aufgeteilt und auf eure Putztage verteilt, dazu ${CORE_RULES.length} Abmachungen</span></button>
       <button class="choice" data-setup="rules"><strong>Leer starten</strong>
         <span>Aufgaben selbst anlegen, Abmachungen auswählen</span></button>${err}
       ${st.reset ? '<p class="small">Die bisherigen Aufgaben werden ersetzt. Code, Verbindung und Verlauf bleiben.</p>' : ''}
@@ -1054,10 +1058,10 @@ function renderSetup() {
       <button class="rowbtn" data-split="${i}"><span>${esc(t.title)}<br><span class="meta">${t.min} Min · ${intervalLabel(t)} · ${hours(monthlyMinutes(t))} h/Monat</span></span><span class="meta">tauschen</span></button>`).join('');
     body = `<h2>Schritt 3 von 3 · Aufteilung</h2>
       <div class="banner now">${names[0]} <strong>${hours(load.p1)} h</strong> · ${names[1]} <strong>${hours(load.p2)} h</strong> pro Monat</div>
-      <p class="small">Automatisch fair verteilt: pro Intervall gleich viele Aufgaben und möglichst gleich viel Zeit (Dauer × Häufigkeit). Antippen gibt eine Aufgabe der anderen Person – die Bilanz rechnet mit. Gemeinsames zählt je zur Hälfte. Zeiten kannst du später bei jeder Aufgabe ändern.</p>
+      <p class="small">Automatisch fair verteilt: insgesamt möglichst gleich viel Zeit (Dauer × Häufigkeit), das Häufige zuerst. Antippen gibt eine Aufgabe der anderen Person – die Bilanz rechnet mit. Gemeinsames zählt je zur Hälfte. Zeiten kannst du später bei jeder Aufgabe ändern.</p>
       <h2><i class="sw" style="--pc:var(--c-${st.persons[0].color})"></i>${names[0]}</h2><div class="rows">${list('A')}</div>
       <h2><i class="sw" style="--pc:var(--c-${st.persons[1].color})"></i>${names[1]}</h2><div class="rows">${list('B')}</div>
-      <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und alle ${TEMPLATE_RULES.length} Abmachungen.</p>
+      <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und ${st.planRules.length} Abmachungen.</p>
       ${err}
       <div class="btnrow"><button class="btn" data-setup="template">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
   } else if (st.step === 'rules') {
@@ -1085,10 +1089,10 @@ function renderSetup() {
 
 // Termine erst beim Anlegen verteilen (nach dem Umverteilen auf A/B)
 function setupTasks(withTemplate) {
-  return withTemplate ? spreadPositions(S.setup.tasks).map((t, i) => ({ ...t, id: newId(), created: S.setup.start, order: i })) : [];
+  return withTemplate ? spreadPositions(S.setup.tasks).map(({ when, ...t }, i) => ({ ...t, id: newId(), created: S.setup.start, order: i })) : [];
 }
 const setupPersons = () => S.setup.persons.map((p, i) => ({ id: `p${i + 1}`, name: p.name.trim(), color: p.color, days: p.days }));
-const setupRules = (withTemplate) => RULE_SUGGESTIONS.filter((r) => S.setup.rules.includes(r) || (withTemplate && TEMPLATE_RULES.includes(r)));
+const setupRules = (withTemplate) => RULE_SUGGESTIONS.filter((r) => S.setup.rules.includes(r) || (withTemplate && S.setup.planRules.includes(r)));
 
 async function createHousehold(withTemplate) {
   const st = S.setup;
@@ -1125,7 +1129,7 @@ function resetPlan(withTemplate) {
   const persons = S.hh.persons.map((p, i) => ({ ...p, ...setupPersons()[i], id: p.id }));
   for (const t of S.tasks) S.store.deleteTask(S.code, t.id);
   for (const t of setupTasks(withTemplate)) S.store.saveTask(S.code, t);
-  updateHH({ persons, sharedDays: st.shared, rules: [...setupRules(withTemplate), ...ownRules()], setup: st.start, swapped: false });
+  updateHH({ persons, sharedDays: st.shared, rules: [...setupRules(withTemplate), ...ownRules().filter((r) => !RULE_RENAMED[r])], setup: st.start, swapped: false });
   S.setup = null;
   S.view = 'heute';
   S.stack = [];
@@ -1486,8 +1490,10 @@ function setupAction(a) {
   if (a === 'new' || a === 'persons') st.step = 'persons';
   else if (a === 'start') st.step = 'start';
   else if (a === 'rules') st.step = 'rules';
-  else if (a === 'split') {
-    if (!st.tasks.length) st.tasks = autoSplit(TEMPLATE);
+  else if (a === 'plan-our' || a === 'plan-core') {
+    const our = a === 'plan-our';
+    st.tasks = autoSplit(our ? OUR_TASKS : CORE_TASKS);
+    st.planRules = our ? OUR_RULES : CORE_RULES;
     st.step = 'split';
   } else if (a === 'template') {
     if (st.persons.some((p) => !p.name.trim())) st.error = 'Bitte beide Namen eingeben.';
@@ -1655,6 +1661,7 @@ function openEditor(id) {
       <label class="field" data-pos>Termin<select name="pos"></select></label>
       <label class="cb"><input type="checkbox" name="hasSeason" ${t.season ? 'checked' : ''}> Nur in einer Saison</label>
       <div class="inline" data-season><select name="from">${months(t.season?.from ?? 3)}</select><span>bis</span><select name="to">${months(t.season?.to ?? 10)}</select></div>
+      <div class="inline" data-season2><span>und</span><select name="from2" aria-label="Zweiter Zeitraum von">${opt('', '–', t.season?.from2 ?? '')}${months(t.season?.from2 ?? '')}</select><span>bis</span><select name="to2" aria-label="Zweiter Zeitraum bis">${months(t.season?.to2 ?? 11)}</select></div>
       <label class="field">Hinweis<input type="text" name="note" value="${esc(t.note)}" maxlength="200"></label>
       <label class="field">Teilschritte (einer pro Zeile)<textarea name="steps" rows="3" placeholder="WC&#10;Waschbecken&#10;Dusche">${esc((t.steps || []).join('\n'))}</textarea></label>
     </details>
@@ -1669,12 +1676,17 @@ function openEditor(id) {
   editorEntry = true;
   const form = $('#taskForm');
   const f = form.elements;
+  const seasonValue = () => {
+    if (!f.hasSeason.checked) return null;
+    const s = { from: +f.from.value, to: +f.to.value };
+    return f.from2.value === '' ? s : { ...s, from2: +f.from2.value, to2: +f.to2.value };
+  };
   // Entwurf aus dem Formular, für die Vorschau der nächsten Termine
   const draft = (over = {}) => {
     const k = f.kind.value;
     const iv = k === 'custom' ? { n: Math.max(1, Math.min(999, parseInt(f.n.value, 10) || 1)), unit: f.unit.value } : PRESETS[k];
     return {
-      id: 'x', ...iv, assign: f.assign.value, season: f.hasSeason.checked ? { from: +f.from.value, to: +f.to.value } : null,
+      id: 'x', ...iv, assign: f.assign.value, season: seasonValue(),
       day: f.day.value === '' ? null : +f.day.value, pos: +f.pos.value || 0,
       created: t.created || S.today, ...over,
     };
@@ -1705,6 +1717,7 @@ function openEditor(id) {
     $('[data-custom]', form).hidden = k !== 'custom';
     $('[data-permonth]', form).hidden = k !== 'asneeded';
     $('[data-season]', form).hidden = !f.hasSeason.checked;
+    $('[data-season2]', form).hidden = !f.hasSeason.checked;
     $('[data-hint]', form).textContent = k === 'asneeded'
       ? 'Bei Bedarf: kein fixer Rhythmus, nie „nicht geschafft“. Einfach abhaken, wenn erledigt – zählt trotzdem im Verlauf und Kalender.'
       : k === 'halfyear' ? 'Halbjährlich = Jänner–Juni und Juli–Dezember.' : '';
@@ -1715,7 +1728,7 @@ function openEditor(id) {
     sync();
   });
   f.hasSeason.addEventListener('change', sync);
-  for (const el of [f.day, f.pos, f.n, f.unit, f.from, f.to, f.assign]) el.addEventListener('change', sync);
+  for (const el of [f.day, f.pos, f.n, f.unit, f.from, f.to, f.from2, f.to2, f.assign]) el.addEventListener('change', sync);
   $('[data-close]', form).onclick = closeEditor;
   const del = $('[data-delete]', form);
   if (del) del.onclick = () => {
@@ -1735,9 +1748,10 @@ function openEditor(id) {
       id: t.id || newId(),
       title,
       note: f.note.value.trim(),
+      area: t.area ?? null,
       ...iv,
       assign: f.assign.value,
-      season: f.hasSeason.checked ? { from: +f.from.value, to: +f.to.value } : null,
+      season: seasonValue(),
       day: $('[data-day]', form).hidden || f.day.value === '' ? null : +f.day.value,
       pos: $('[data-pos]', form).hidden ? null : +f.pos.value || 0,
       created: t.created || S.today,
