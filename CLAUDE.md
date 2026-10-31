@@ -115,6 +115,21 @@ Gilt vor älteren Einträgen oben („Serie“ in Tagen, sechs Meilensteine, Tie
 - `syncStats` schreibt nur bei Änderung und erst, wenn Erledigungen und Aufgaben geladen sind (`S.daysReady`). Beim ersten Mal still, danach Puls in der Statuskarte. `start` = Plan, für den der Stern „Der Anfang ist gemacht!“ schon kam; zählt nur eine Erledigung einer aktuellen Aufgabe.
 - `celebrate`: Einblendung `#fx` (1,4 s, Antippen schließt), Stern als Linie in Personenfarbe, bei geschafftem Ziel mit Verlauf aus beiden Farben (`fairplan.goal-star` einmal pro Gerät), beim Joker eigenes Symbol. „Alles erledigt“ zeigt den Stern statt des Tiers. „Bewegung reduzieren“ schaltet die Animationen ab.
 
+## Bis zu 6 Personen (31.10.2026, v40)
+Gilt vor älteren Einträgen oben („Paket A/B“, „2 Personen“).
+- Anlegen: Anzahl 2 bis 6 (`data-setup-count`), Farben ohne Doppelte; ändern nur über einen neuen Haushalt. Ab 3 Personen fallen „Daniel und Sabrina“ und „Vorschlag 2-Personen-Haushalt“ weg, es bleibt „Leer starten“.
+- Pakete A bis F (`PACKAGES`, `isPackage`), `packageOwners` liefert die Person je Paket, Tausch reihum. `swapsByRound`: Rhythmen, die mit dem Monatstausch immer dieselben träfen (gemeinsamer Teiler von Monatszahl und Personen, bei 2 Personen wie bisher halbjährlich und jährlich), wechseln je Durchgang.
+- `autoSplit(tasks, persons)`: bei 2 unverändert; ab 3 von häufig nach selten, die größte zuerst an das Paket mit der wenigsten Zeit. Eine übergroße Aufgabe (Wäsche) kann den Unterschied bestimmen, der Tausch gleicht ihn aus.
+- Aufteilung: Antippen gibt die Aufgabe der nächsten Person, reihum.
+- Anzeige bei vielen Personen am Handy (Kalenderpunkte, lange Tagesliste) nur am Testbild geprüft.
+
+## Neuer Haushalt und Meine Haushalte (31.10.2026, v41)
+- Personenzahl ändern heißt: neuer Haushalt mit neuem Code (`newHome`, Mehr › Haushalt oder Meine Haushalte). Der alte bleibt unverändert und bekommt `movedTo` = neuer Code. Gelöscht wird nichts.
+- Andere Geräte im alten Haushalt sehen auf „Aktuell“ `movedNote` mit „Wechseln“ oder „Hier bleiben“ (`fairplan.moved-stay`), danach „Wer bist du?“.
+- `fairplan.homes` = Liste nur auf diesem Gerät (`rememberHome`, `upsertHome`: code, names, me, setup), kostet keine Lesezugriffe. Unter Mehr ab 2 Einträgen, auf der Startseite wenn abgemeldet. Entfernen betrifft nur die Liste, Abmelden entfernt den aktuellen Eintrag.
+- `switchHome` lädt die Seite neu, damit nichts vom anderen Haushalt übrig bleibt.
+- Haushalte aller Nutzer sind bewusst nicht auflistbar (Regeln). Echtes Löschen fehlt noch: vor dem Verkauf, mit Bestätigung aller und Frist, dafür Regeln ändern.
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.
