@@ -94,6 +94,14 @@ Gilt vor älteren Einträgen oben, wo sie sich widersprechen (Spielraum, Tauscht
 - Abwesenheit: `myPaused` blendet Wöchentliches nur aus, wenn man heute weg ist oder der Termintag in die Abwesenheit fällt; verpasst wird nachgesehen, wenn die Abwesenheit die Zeit bis zum nächsten Termin berührt.
 - Editor (v36): „Termin“ bei wöchentlich bietet nur so viele Einträge wie Putztage (`putztagCount`, mit Tausch die höhere Zahl beider Personen) und ist bei einem Putztag ausgeblendet; `pos` bleibt dann gespeichert, falls später ein zweiter Putztag dazukommt.
 
+## Gemeinsames Ziel (31.10.2026, v37; Vault-Notiz „Prompt Belohnungen“, Runde 1 von 3)
+- `goal` im Haushalt `{ percent, reward }`, fehlt = 90 % ohne Belohnung (`goalOf`). Einrichten: eigener Schritt nach der Aufteilung (beim leeren Start ohne Aufgaben entfällt er), sonst Mehr › Haushalt (`goalBlock`, `setGoal`). „Plan neu einrichten“ übernimmt das bisherige Ziel.
+- `goalStats`: alle Termine des Monats beider Personen, ohne Tägliches und Abmachungen; Pausiertes zählt nur, wenn es erledigt ist; Vertretung zählt. Prozent rechnen mit dem ganzen Monat und sind abgerundet.
+- `goalResult` (Vormonat): `reached` = Quote erreicht, `settled` = letzte Frist vorbei (Termine laufen bis in den neuen Monat). Hinweis einmal pro Monat und Gerät (`fairplan.goal-seen`): „Geschafft! …“ sobald erreicht, „Neuer Monat, neues Ziel.“ erst nach der letzten Frist. Startmonat zählt nur mit mindestens 14 Tagen.
+- `goalHits` im Haushalt `{ 'YYYY-MM': Belohnung }` hält Erreichtes fest, auch nach „Plan neu einrichten“. Meilenstein „Gemeinsames Ziel“ liest das.
+- Beim Einrichten zeichnet das Textfeld nicht neu (`input` statt `change`), sonst ginge der Tipp auf „Haushalt anlegen“ beim Verlassen des Felds verloren.
+- Noch offen laut Vault: Runde 2 Joker (30 statt 10 Abmachungen, Entscheidung Daniel), Runde 3 Statistik und Stern.
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.
