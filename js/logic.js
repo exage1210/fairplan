@@ -98,10 +98,12 @@ function periodScheme(task, setupDay) {
 
 // ---------- Saison ----------
 
+const inRange = (from, to, month) => (from <= to ? month >= from && month <= to : month >= from || month <= to);
+
+// Saison { from, to }, optional zweiter Zeitraum { from2, to2 } (z. B. Frühling und Herbst)
 export function inSeason(season, month) {
   if (!season) return true;
-  const { from, to } = season;
-  return from <= to ? month >= from && month <= to : month >= from || month <= to;
+  return inRange(season.from, season.to, month) || (season.from2 != null && inRange(season.from2, season.to2, month));
 }
 
 // ---------- Putztage & Fälligkeit ----------
@@ -217,13 +219,21 @@ export function ownerOf(task, period, day, slot, ctx) {
 // ---------- Aufwand & faire Aufteilung ----------
 
 // Wie oft pro Monat? täglich 30 · wöchentlich 4,3 · alle 2 Wochen 2,2 · monatlich 1 · vierteljährlich 1/3 …
-// Bei Bedarf: geschätzte Anzahl (perMonth). Saisonaufgaben nur anteilig (Saisonmonate / 12).
+// Bei Bedarf: geschätzte Anzahl (perMonth). Saisonaufgaben nur anteilig (Saisonmonate / 12);
+// Monats-, Quartals-, Halbjahres- und Jahresintervalle: Perioden im Jahr mit mindestens einem Saisonmonat / 12.
 export function timesPerMonth(task) {
   const k = kindOf(task);
+  if (task.season && task.unit === 'month' && 12 % task.n === 0) {
+    let periods = 0;
+    for (let m = 1; m <= 12; m += task.n) {
+      if (Array.from({ length: task.n }, (_, j) => m + j).some((x) => inSeason(task.season, x))) periods++;
+    }
+    return periods / 12;
+  }
   let n = k === 'asneeded' ? Number(task.perMonth) || 0
     : k === 'biweekly' ? 2.2
       : { day: 30, week: 4.3, month: 1 }[task.unit] / task.n;
-  if (task.season) n *= (mod(task.season.to - task.season.from, 12) + 1) / 12;
+  if (task.season) n *= Array.from({ length: 12 }, (_, m) => m + 1).filter((m) => inSeason(task.season, m)).length / 12;
   return n;
 }
 export const monthlyMinutes = (task) => (Number(task.min) || 0) * timesPerMonth(task);
@@ -243,10 +253,10 @@ export function loadByPerson(tasks, ctx) {
   return out;
 }
 
-// Pakete A/B fair aufteilen – je Intervall für sich: beide bekommen gleich viele Aufgaben (±1) und
-// möglichst gleich viel Aufwand (alle Varianten durchprobiert, bei bis zu 16 Aufgaben pro Intervall).
-// Danach bekommt die Person mit bisher weniger Gesamtaufwand jeweils die größere Hälfte.
-// Gemeinsames, Abwechselndes und „pro Person“ bleiben unverändert.
+// Pakete A/B fair nach Zeit aufteilen: insgesamt möglichst gleich viel Aufwand. Von häufig nach selten:
+// Jedes Intervall wird so geteilt, dass der bisherige Unterschied möglichst klein wird. So ist das Spürbare
+// (Wöchentliches) zuerst ausgeglichen, und seltene Aufgaben gleichen den Rest aus. Bei gleichem Ergebnis gewinnt
+// die gleichmäßigere Anzahl. Gemeinsames, Abwechselndes und „pro Person“ bleiben unverändert.
 export function autoSplit(tasks) {
   const groups = new Map();
   tasks.forEach((t, i) => {
@@ -255,37 +265,37 @@ export function autoSplit(tasks) {
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(i);
   });
-  const halves = [...groups.values()].map((idx) => {
+  const length = (t) => (t.unit === 'need' ? Infinity : t.n * { day: 1, week: 7, month: 30 }[t.unit]);
+  const ordered = [...groups.values()].sort((a, b) => length(tasks[a[0]]) - length(tasks[b[0]]));
+
+  let lead = 0; // Vorsprung von A in Minuten pro Monat
+  const assign = new Map();
+  for (const idx of ordered) {
     const m = idx.map((i) => monthlyMinutes(tasks[i]));
     const total = m.reduce((a, b) => a + b, 0);
-    let best = null;
+    let best = 0;
     if (idx.length <= 16) {
+      let bestDiff = Infinity, bestSpread = Infinity;
       for (let mask = 0; mask < 1 << idx.length; mask++) {
         let n = 0, sum = 0;
         for (let k = 0; k < idx.length; k++) if (mask & (1 << k)) { n++; sum += m[k]; }
-        if (Math.abs(2 * n - idx.length) > 1) continue;
-        const diff = Math.abs(2 * sum - total);
-        if (!best || diff < best.diff - 1e-9) best = { diff, mask, sum };
+        const diff = Math.abs(lead + 2 * sum - total);
+        const spread = Math.abs(2 * n - idx.length);
+        if (diff < bestDiff - 1e-9 || (Math.abs(diff - bestDiff) <= 1e-9 && spread < bestSpread)) {
+          bestDiff = diff; bestSpread = spread; best = mask;
+        }
       }
-    } else { // sehr viele Aufgaben: abwechselnd nach Aufwand
-      const order = idx.map((_, k) => k).sort((a, b) => m[b] - m[a]);
-      let mask = 0, sum = 0;
-      order.forEach((k, r) => { if (r % 2 === 0) { mask |= 1 << k; sum += m[k]; } });
-      best = { mask, sum };
+    } else { // sehr viele Aufgaben: die größte zuerst, jeweils an die Person mit weniger
+      let d = lead;
+      idx.map((_, k) => k).sort((a, b) => m[b] - m[a]).forEach((k) => {
+        if (d <= 0) { best |= 1 << k; d += m[k]; } else d -= m[k];
+      });
     }
-    const one = idx.filter((_, k) => best.mask & (1 << k)), other = idx.filter((_, k) => !(best.mask & (1 << k)));
-    const big = best.sum >= total - best.sum ? [one, other, best.sum, total - best.sum] : [other, one, total - best.sum, best.sum];
-    return { big: big[0], small: big[1], bigSum: big[2], smallSum: big[3] };
-  }).sort((a, b) => (b.bigSum - b.smallSum) - (a.bigSum - a.smallSum));
-
-  const load = { A: 0, B: 0 };
-  const assign = new Map();
-  for (const h of halves) {
-    const [lo, hi] = load.A <= load.B ? ['A', 'B'] : ['B', 'A'];
-    h.big.forEach((i) => assign.set(i, lo));
-    h.small.forEach((i) => assign.set(i, hi));
-    load[lo] += h.bigSum;
-    load[hi] += h.smallSum;
+    idx.forEach((i, k) => {
+      const toA = best & (1 << k);
+      assign.set(i, toA ? 'A' : 'B');
+      lead += toA ? m[k] : -m[k];
+    });
   }
   return tasks.map((t, i) => (assign.has(i) ? { ...t, assign: assign.get(i) } : t));
 }
