@@ -5,6 +5,7 @@ import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, inSeason, windowsBetween, awayDuring,
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, streaks,
+  personalWeek, isPressing,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -43,16 +44,18 @@ test('Intervall-Arten werden erkannt', () => {
 
 test('überfällig erscheint nur einmal, verpasste Durchgänge stapeln sich nicht', () => {
   const t = task({ created: '2026-11-01' });
-  // Woche ab 2.11. nicht erledigt → in der Woche ab 9.11. überfällig
-  const o = one(t, ctx(), '2026-11-10');
+  // Termin 7.11. nicht erledigt → ab dem nächsten Termin 14.11. überfällig
+  assert.equal(one(t, ctx(), '2026-11-13').status, 'due');
+  const o = one(t, ctx(), '2026-11-14');
   assert.equal(o.status, 'overdue');
   assert.equal(o.key, 'weekly:2026-11-09');
   // nach mehreren verpassten Wochen trotzdem genau ein Element
   const items = evaluate(t, ctx(), '2026-12-15', new Map());
   assert.equal(items.length, 1);
   assert.equal(items[0].status, 'overdue');
-  // Abhaken (für die aktuelle Periode) → erledigt
-  assert.equal(one(t, ctx(), '2026-12-15', [['weekly:2026-12-14', null]]).status, 'done');
+  // Abhaken (für den laufenden Termin 12.12.) → erledigt, der nächste lässt sich schon vorziehen
+  assert.equal(one(t, ctx(), '2026-12-13', [['weekly:2026-12-07', null]]).status, 'done');
+  assert.equal(one(t, ctx(), '2026-12-15', [['weekly:2026-12-07', null]]).status, 'upcoming');
 });
 
 test('täglich: gestern verpasst verfällt, heute einfach fällig', () => {
@@ -66,11 +69,11 @@ test('täglich: gestern verpasst verfällt, heute einfach fällig', () => {
 test('alle 2 Wochen: gezählt ab der Einrichtungswoche, über den Jahreswechsel', () => {
   const t = task({ n: 2 });
   assert.equal(one(t, ctx(), '2026-10-28').key, 'biweekly:2026-10-26');
-  assert.equal(one(t, ctx(), '2026-11-08').key, 'biweekly:2026-10-26');
-  assert.equal(one(t, ctx(), '2026-11-09').key, 'biweekly:2026-11-09');
-  // 26.10. + 5×14 Tage = 4.1.2027
-  assert.equal(one(t, ctx(), '2027-01-03').key, 'biweekly:2026-12-21');
-  assert.equal(one(t, ctx(), '2027-01-04').key, 'biweekly:2027-01-04');
+  assert.equal(one(t, ctx(), '2026-11-13').key, 'biweekly:2026-10-26'); // Termin 31.10., läuft bis zum nächsten
+  assert.equal(one(t, ctx(), '2026-11-14').key, 'biweekly:2026-11-09');
+  // 26.10. + 5×14 Tage = 4.1.2027, Termin 9.1.
+  assert.equal(one(t, ctx(), '2027-01-08').key, 'biweekly:2026-12-21');
+  assert.equal(one(t, ctx(), '2027-01-09').key, 'biweekly:2027-01-04');
 });
 
 test('täglich abwechselnd, auch über den Jahreswechsel', () => {
@@ -126,24 +129,24 @@ test('Faire Aufteilung: je Intervall ausgeglichen, Gemeinsames zählt halb, Pake
   assert.deepEqual(packageOwners(ctx({ swapped: true })), ['p2', 'p1']);
 });
 
-test('wöchentlich: am Putztag dran, 2 Tage Spielraum, dann vergessen', () => {
+test('wöchentlich: ab dem Putztag dran bis zum Tag vor dem nächsten, dann vergessen', () => {
   const t = task({ assign: 'A' });
-  assert.deepEqual(st(t, ctx(), '2026-10-29'), ['upcoming', '2026-10-31', '2026-11-02']);
-  assert.deepEqual(st(t, ctx(), '2026-10-31'), ['due', '2026-10-31', '2026-11-02']);
-  // Montag: neue Woche, aber der Samstag ist noch im Spielraum
-  const mo = one(t, ctx(), '2026-11-02');
-  assert.deepEqual([mo.status, mo.key], ['due', 'weekly:2026-10-26']);
-  const di = one(t, ctx(), '2026-11-03');
-  assert.deepEqual([di.status, di.end, di.key], ['overdue', '2026-11-02', 'weekly:2026-11-02']);
-  assert.deepEqual(st(t, ctx(), '2026-11-03', [['weekly:2026-10-26', null]]), ['upcoming', '2026-11-07', '2026-11-09']);
+  assert.deepEqual(st(t, ctx(), '2026-10-29'), ['upcoming', '2026-10-31', '2026-11-06']);
+  assert.deepEqual(st(t, ctx(), '2026-10-31'), ['due', '2026-10-31', '2026-11-06']);
+  // Freitag: neue Kalenderwoche, aber die Zeit läuft noch
+  const fr = one(t, ctx(), '2026-11-06');
+  assert.deepEqual([fr.status, fr.key], ['due', 'weekly:2026-10-26']);
+  const sa = one(t, ctx(), '2026-11-07');
+  assert.deepEqual([sa.status, sa.end, sa.key], ['overdue', '2026-11-06', 'weekly:2026-11-02']);
+  assert.deepEqual(st(t, ctx(), '2026-11-03', [['weekly:2026-10-26', null]]), ['upcoming', '2026-11-07', '2026-11-13']);
 });
 
 test('vergessen erscheint nur einmal, verpasste Wochen stapeln sich nicht', () => {
   const t = task({ assign: 'A' });
   assert.equal(one(t, ctx(), '2026-11-24').status, 'overdue');
   assert.equal(evaluate(t, ctx(), '2026-11-24', new Map()).length, 1);
-  // der aktuelle Termin selbst vorbei → vergessen, mit dessen Spielraum
-  assert.deepEqual(st(t, ctx(), '2026-11-24'), ['overdue', '2026-11-21', '2026-11-23']);
+  // rot ist immer der zuletzt verpasste Termin
+  assert.deepEqual(st(t, ctx(), '2026-11-24'), ['overdue', '2026-11-14', '2026-11-20']);
 });
 
 test('mehrere Putztage: wöchentlich wählt pos den Tag in der Woche', () => {
@@ -175,10 +178,10 @@ test('Gemeinsames am gemeinsamen Putztag, fester Tag geht vor', () => {
   assert.equal(one(task({ assign: 'A', day: 1 }), ctx(), '2026-11-02').due, '2026-11-03'); // fester Dienstag
 });
 
-test('alle 2 Wochen: Block ab der Startwoche, pos = Woche, 3 Tage Spielraum', () => {
+test('alle 2 Wochen: Block ab der Startwoche, pos = Woche, Zeit bis zum nächsten Termin', () => {
   const t = (pos) => task({ n: 2, unit: 'week', assign: 'A', pos });
-  assert.deepEqual(st(t(0), ctx(), '2026-10-29'), ['upcoming', '2026-10-31', '2026-11-03']);
-  assert.deepEqual(st(t(1), ctx(), '2026-10-29'), ['upcoming', '2026-11-07', '2026-11-10']);
+  assert.deepEqual(st(t(0), ctx(), '2026-10-29'), ['upcoming', '2026-10-31', '2026-11-13']);
+  assert.deepEqual(st(t(1), ctx(), '2026-10-29'), ['upcoming', '2026-11-07', '2026-11-20']);
   assert.equal(one(t(0), ctx(), '2026-11-10', [['biweekly:2026-10-26', null]]).due, '2026-11-14'); // nächster Block
 });
 
@@ -237,18 +240,18 @@ test('Tagesintervalle zählen ab dem Start, Monatsintervalle ab dem Startmonat',
 
 test('relevante Schlüssel und Kalender', () => {
   const t = task({ assign: 'A' });
-  assert.deepEqual(relevantKeys([t], ctx(), '2026-11-04'), ['weekly:2026-10-26', 'weekly:2026-11-02']);
+  assert.deepEqual(relevantKeys([t], ctx(), '2026-11-04'), ['weekly:2026-10-19', 'weekly:2026-10-26', 'weekly:2026-11-02', 'weekly:2026-11-09']);
   const w = windowsBetween(t, ctx(), '2026-11-01', '2026-11-15');
   assert.deepEqual(w.map((x) => [x.start, x.end, x.owner]), [
-    ['2026-10-31', '2026-11-02', 'p1'], ['2026-11-07', '2026-11-09', 'p1'], ['2026-11-14', '2026-11-16', 'p1'],
+    ['2026-10-31', '2026-11-06', 'p1'], ['2026-11-07', '2026-11-13', 'p1'], ['2026-11-14', '2026-11-20', 'p1'],
   ]);
 });
 
 test('Abwesenheit pausiert: verpasst während Urlaub → nicht vergessen', () => {
   const t = task({ assign: 'A' });
   const away = { p1: { from: '2026-10-30', to: '2026-11-02' } };
-  assert.equal(one(t, ctx(), '2026-11-04').status, 'overdue');
-  assert.equal(one(t, ctx({ away }), '2026-11-04').status, 'upcoming');
+  assert.equal(one(t, ctx(), '2026-11-08').status, 'overdue');
+  assert.equal(one(t, ctx({ away }), '2026-11-08').status, 'due');
 });
 
 test('Feiertage Österreich inkl. Ostern', () => {
@@ -389,12 +392,12 @@ test('Tausch: Pakete tauschen monatlich, bei mehr Personen reihum', () => {
   assert.deepEqual([0, 1, 2, 3].map((n) => packageOwners(three, n)), [['p1', 'p2'], ['p2', 'p3'], ['p3', 'p1'], ['p1', 'p2']]);
 });
 
-test('Tauschtag: zuständig bleibt, wer zu Beginn der Periode dran war', () => {
+test('Tauschtag: wöchentlich zählt der Monat des Putztags, sonst der Beginn der Periode', () => {
   const w = rotTask();
-  assert.equal(ownerNow(w, rot(), '2026-11-29'), 'p2'); // Woche ab 23.11.
-  assert.equal(ownerNow(w, rot(), '2026-12-01'), 'p2'); // Woche ab 30.11. begann im November
-  assert.equal(ownerNow(w, rot(), '2026-12-06'), 'p2');
-  assert.equal(ownerNow(w, rot(), '2026-12-07'), 'p1'); // erste Woche, die im Dezember beginnt
+  assert.equal(ownerNow(w, rot(), '2026-11-29'), 'p2'); // Termin 28.11.
+  assert.equal(ownerNow(w, rot(), '2026-12-01'), 'p2'); // Termin 28.11. läuft noch
+  assert.equal(ownerNow(w, rot(), '2026-12-04'), 'p2');
+  assert.equal(ownerNow(w, rot(), '2026-12-05'), 'p1'); // erster Putztag im Dezember
   const q = rotTask({ n: 3, unit: 'month' });
   assert.deepEqual(['2026-10-20', '2026-12-31', '2027-01-05', '2027-04-05'].map((d) => ownerNow(q, rot(), d)), ['p1', 'p1', 'p2', 'p1']);
 });
@@ -430,4 +433,141 @@ test('Vorlage: Seltenes mit Person, gemeinsam nur Ausmisten und Bei Bedarf', () 
   assert.deepEqual(shared, ['Abflüsse reinigen', 'Ausmisten', 'Gefrierschrank abtauen', 'Mistkübel auswaschen']);
   const halves = split.filter((t) => t.n === 6 && t.unit === 'month');
   assert.ok(halves.some((t) => t.assign === 'A') && halves.some((t) => t.assign === 'B'));
+});
+
+// ---------- Persönliche Woche (Person p1 Montag, p2 Sonntag) ----------
+
+const moSo = (over = {}) => ({
+  setup: '2026-11-02', rotateFrom: '2026-11', swapped: false,
+  persons: [{ id: 'p1', name: 'Mo', days: [0] }, { id: 'p2', name: 'So', days: [6] }],
+  ...over,
+});
+const wk = (over = {}) => ({ id: 'w', title: 'W', n: 1, unit: 'week', assign: 'A', season: null, created: '2026-11-02', ...over });
+const terms = (t, c, from, to) => windowsBetween(t, c, from, to).map((w) => [w.start, w.end, w.owner]);
+
+test('persönliche Woche: beim Tausch Abstand 6 und 8 Tage, jede Person hat ihre Woche', () => {
+  assert.deepEqual(terms(wk(), moSo(), '2026-11-23', '2027-01-11'), [
+    ['2026-11-23', '2026-11-29', 'p1'],
+    ['2026-11-30', '2026-12-05', 'p1'], // 6 Tage bis zum ersten Sonntag im Dezember
+    ['2026-12-06', '2026-12-12', 'p2'],
+    ['2026-12-13', '2026-12-19', 'p2'],
+    ['2026-12-20', '2026-12-26', 'p2'],
+    ['2026-12-27', '2027-01-03', 'p2'], // 8 Tage bis zum ersten Montag im Jänner
+    ['2027-01-04', '2027-01-10', 'p1'],
+    ['2027-01-11', '2027-01-17', 'p1'],
+  ]);
+});
+
+test('persönliche Woche: zwei Termine in einer Kalenderwoche zählen getrennt', () => {
+  const t = wk();
+  const w = windowsBetween(t, moSo(), '2026-11-30', '2026-12-06');
+  assert.deepEqual(w.map((x) => x.key), ['weekly:2026-11-30', 'weekly:2026-11-30b']);
+  // Montag erledigt: der Sonntag der anderen Person bleibt offen
+  const done = [['weekly:2026-11-30', null]];
+  assert.deepEqual(st(t, moSo(), '2026-12-06', done), ['due', '2026-12-06', '2026-12-12']);
+  assert.equal(one(t, moSo(), '2026-12-06', done).owner, 'p2');
+  assert.equal(one(t, moSo(), '2026-12-06', [...done, ['weekly:2026-11-30b', null]]).status, 'done');
+  assert.ok(relevantKeys([t], moSo(), '2026-12-06').includes('weekly:2026-11-30b'));
+});
+
+test('persönliche Woche: Vorziehen ab Montag der Kalenderwoche, zählt für den Termin', () => {
+  const t = wk({ assign: 'B' }); // im November bei p2, Sonntag
+  const c = moSo();
+  assert.deepEqual(st(t, c, '2026-11-09', [['weekly:2026-11-02', null]]), ['upcoming', '2026-11-15', '2026-11-21']);
+  const early = [['weekly:2026-11-02', null], ['weekly:2026-11-09', null]];
+  assert.equal(one(t, c, '2026-11-10', early).status, 'done');
+  assert.equal(one(t, c, '2026-11-15', early).status, 'done'); // am Termin nicht nochmal offen
+  assert.equal(one(t, c, '2026-11-16', early).status, 'upcoming'); // erst die nächste Runde
+  assert.equal(one(t, c, '2026-11-16', early).due, '2026-11-22');
+});
+
+test('persönliche Woche: heute Erledigtes bleibt heute erledigt, auch vor einem Termin in derselben Woche', () => {
+  const t = wk();
+  const m = new Map([[completionId(t.id, 'weekly:2026-11-30', null), { by: 'p1', day: '2026-11-30' }]]);
+  const today = evaluate(t, moSo(), '2026-11-30', m)[0];
+  assert.deepEqual([today.status, today.next], ['done', '2027-01-04']); // nächster eigener Termin, nicht der von p2
+  const later = evaluate(t, moSo(), '2026-12-01', m)[0];
+  assert.deepEqual([later.status, later.owner, later.key], ['upcoming', 'p2', 'weekly:2026-11-30b']);
+});
+
+test('persönliche Woche: verpasst wird am nächsten Termin rot, bei der Person, ein Haken für beide', () => {
+  const t = wk();
+  const late = one(t, moSo(), '2026-11-09');
+  assert.deepEqual([late.status, late.owner, late.due, late.key], ['overdue', 'p1', '2026-11-02', 'weekly:2026-11-09']);
+  assert.equal(one(t, moSo(), '2026-11-09', [['weekly:2026-11-09', null]]).status, 'done');
+  // über den Tausch: Montag 30.11. verpasst → am Sonntag 6.12. rot bei p1
+  const swap = one(t, moSo(), '2026-12-06', [['weekly:2026-11-23', null]]);
+  assert.deepEqual([swap.status, swap.owner, swap.key], ['overdue', 'p1', 'weekly:2026-11-30b']);
+});
+
+test('persönliche Woche: bisherige Erledigungen bleiben gültig, nichts wird doppelt fällig', () => {
+  // Erledigung aus der Zeit vor dem Umbau: gleicher Schlüssel wie bisher
+  const t = wk({ assign: 'B', created: '2026-10-28' });
+  const c = moSo({ setup: '2026-10-28', rotateFrom: null });
+  const done = [['weekly:2026-11-02', null]];
+  assert.equal(one(t, c, '2026-11-08', done).status, 'done');
+  assert.equal(one(t, c, '2026-11-08', done).key, 'weekly:2026-11-02');
+  // ohne Tausch nie ein zweiter Termin in der Woche
+  assert.ok(windowsBetween(t, c, '2026-11-01', '2027-03-01').every((w) => !w.key.endsWith('b')));
+});
+
+test('persönliche Woche: ohne Tausch, Fix, gemeinsam und pro Person bleiben regelmäßig', () => {
+  const gaps = (t, c) => {
+    const w = windowsBetween(t, c, '2026-11-02', '2027-02-01');
+    return new Set(w.slice(1).map((x, i) => toDay(x.start) - toDay(w[i].start)));
+  };
+  assert.deepEqual([...gaps(wk(), moSo({ rotateFrom: null }))], [7]);
+  assert.deepEqual([...gaps(wk({ fixed: true }), moSo())], [7]);
+  assert.deepEqual([...gaps(wk({ assign: 'shared' }), moSo({ sharedDays: [5] }))], [7]);
+  const each = windowsBetween(wk({ assign: 'each' }), moSo(), '2026-11-09', '2026-11-15');
+  assert.deepEqual(each.map((w) => [w.slot, w.start, w.end]), [['p1', '2026-11-09', '2026-11-15'], ['p2', '2026-11-08', '2026-11-14'], ['p2', '2026-11-15', '2026-11-21']]);
+  // gleicher Putztag: beim Tausch keine Lücke
+  const same = moSo({ persons: [{ id: 'p1', days: [5] }, { id: 'p2', days: [5] }] });
+  assert.deepEqual([...gaps(wk(), same)], [7]);
+});
+
+test('alle 2 Wochen beim Tausch: ein Termin je Block, Abstand 20 und 8 Tage', () => {
+  const b = wk({ id: 'b', n: 2 });
+  assert.deepEqual(terms(b, moSo(), '2026-11-30', '2027-01-11'), [
+    ['2026-11-30', '2026-12-19', 'p1'],
+    ['2026-12-20', '2027-01-02', 'p2'],
+    ['2027-01-03', '2027-01-10', 'p2'],
+    ['2027-01-11', '2027-01-24', 'p1'],
+  ]);
+});
+
+test('Saison: letzter Termin endet nach einer Runde, nicht erst beim nächsten Frühling', () => {
+  const s = wk({ season: { from: 3, to: 10 }, created: '2026-03-01' });
+  const c = moSo({ setup: '2026-03-01', rotateFrom: null });
+  const last = windowsBetween(s, c, '2026-10-26', '2026-11-20').pop();
+  assert.deepEqual([last.start, last.end], ['2026-10-26', '2026-11-01']);
+  assert.equal(one(s, c, '2026-11-10').status, 'offseason');
+});
+
+test('Monatliches behält den Spielraum', () => {
+  const m = wk({ id: 'm', n: 1, unit: 'month', pos: 0 });
+  assert.deepEqual(terms(m, moSo(), '2026-12-01', '2026-12-10'), [['2026-12-06', '2026-12-11', 'p2']]);
+});
+
+test('eigene Woche und „drängt heute“', () => {
+  assert.deepEqual(personalWeek([0], '2026-12-02'), ['2026-11-30', '2026-12-06']);
+  assert.deepEqual(personalWeek([6], '2026-12-02'), ['2026-11-29', '2026-12-05']);
+  assert.deepEqual(personalWeek([6], '2026-12-06'), ['2026-12-06', '2026-12-12']);
+  assert.deepEqual(personalWeek([2, 5], '2026-12-01'), ['2026-11-25', '2026-12-01']); // Mi und Sa: ab Mi
+  const t = wk();
+  const on = (d) => isPressing(one(t, moSo(), d, [['weekly:2026-11-02', null]]), d);
+  assert.equal(on('2026-11-09'), true); // Termin
+  assert.equal(on('2026-11-10'), true); // Tag danach
+  assert.equal(on('2026-11-11'), false); // bleibt in der Liste, drängt aber nicht
+  assert.equal(isPressing(one(t, moSo(), '2026-11-16', [['weekly:2026-11-02', null]]), '2026-11-16'), true); // rot
+  const m = wk({ n: 1, unit: 'month', pos: 0 });
+  assert.equal(isPressing(one(m, moSo(), '2026-11-05'), '2026-11-05'), true); // Monatliches wie bisher
+});
+
+test('Ganzer Monat: zählt die Termine auf den Putztagen im Monat', () => {
+  const tasks = [wk()];
+  const dec = dueBetween(tasks, moSo(), '2026-12-01', '2026-12-31', new Map(), 'p2');
+  assert.deepEqual(dec.map((w) => w.start), ['2026-12-06', '2026-12-13', '2026-12-20', '2026-12-27']);
+  assert.deepEqual(dueBetween(tasks, moSo(), '2026-12-01', '2026-12-31', new Map(), 'p1').map((w) => w.start), []);
+  assert.deepEqual(dueBetween(tasks, moSo(), '2027-01-01', '2027-01-31', new Map(), 'p1').map((w) => w.start), ['2027-01-04', '2027-01-11', '2027-01-18', '2027-01-25']);
 });
