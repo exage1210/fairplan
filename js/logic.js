@@ -193,10 +193,42 @@ export function holidays(y) {
 
 // ---------- Zuteilung ----------
 
-// Paket A gehört Person 1, Paket B Person 2 (fix; kein Pakettausch). swapped dreht nur um (alte Daten).
-export function packageOwners(ctx) {
-  const [p1, p2] = ctx.persons.map((p) => p.id);
-  return ctx.swapped ? [p2, p1] : [p1, p2];
+// Paket A beginnt bei Person 1, Paket B bei Person 2; turns = wie oft bisher getauscht wurde (reihum).
+// swapped dreht nur um (alte Daten).
+export function packageOwners(ctx, turns = 0) {
+  const ids = ctx.persons.map((p) => p.id);
+  if (ctx.swapped) ids.reverse();
+  return [ids[turns % ids.length], ids[(turns + 1) % ids.length]];
+}
+
+// Monatlicher Tausch: ctx.rotateFrom = 'YYYY-MM', ab dem Monat danach wird am 1. getauscht; null = aus.
+const rotationMonth = (ctx) => { const [y, m] = ctx.rotateFrom.split('-').map(Number); return y * 12 + m - 1; };
+const monthStart = (mi) => dayOf(Math.floor(mi / 12), mod(mi, 12) + 1, 1);
+
+// Liegt der Start weniger als 14 Tage vor dem Monatsersten, wird dieser Tausch übersprungen.
+export function rotationBase(startStr) {
+  const d = toDay(startStr);
+  const next = monthStart(monthIndex(d) + 1);
+  return fromDay(next - d < 14 ? next : d).slice(0, 7);
+}
+export const swapCount = (ctx, todayStr) => (ctx.rotateFrom ? Math.max(0, monthIndex(toDay(todayStr)) - rotationMonth(ctx)) : 0);
+export function nextSwap(ctx, todayStr) {
+  if (!ctx.rotateFrom) return null;
+  return fromDay(monthStart(Math.max(monthIndex(toDay(todayStr)), rotationMonth(ctx)) + 1));
+}
+
+// Tausche für eine Aufgabe, gezählt am Beginn ihrer Periode: Wer dort zuständig ist, bleibt es bis zum Ende.
+// Intervalle mit gerader Monatszahl (halbjährlich, jährlich) würden mit dem Monatstausch immer bei derselben
+// Person landen, sie wechseln deshalb je Durchgang.
+function turnsOf(task, period, day, ctx) {
+  if (!ctx.rotateFrom || task.fixed) return 0;
+  const start = period?.start ?? day;
+  const base = rotationMonth(ctx);
+  if (task.unit === 'month' && task.n % 2 === 0) {
+    const scheme = periodScheme(task, toDay(ctx.setup));
+    return Math.max(0, scheme.indexAt(start) - scheme.indexAt(monthStart(base)));
+  }
+  return Math.max(0, monthIndex(start) - base);
 }
 
 // Zuständige Person für eine Periode. null = gemeinsam.
@@ -210,7 +242,7 @@ export function ownerOf(task, period, day, slot, ctx) {
       return ctx.persons[odd !== !!ctx.swapped ? 1 : 0].id;
     }
     default: {
-      const [a, b] = packageOwners(ctx);
+      const [a, b] = packageOwners(ctx, turnsOf(task, period, day, ctx));
       return task.assign === 'A' ? a : b;
     }
   }
@@ -327,6 +359,13 @@ function periodsAround(task, ctx, today) {
   const gap = today > cur.end;
   const prev = gap ? cur : scheme.byIndex(i - 1);
   return { scheme, i, cur: gap ? null : cur, prev };
+}
+
+// Wer ist heute für die laufende Periode zuständig?
+export function ownerNow(task, ctx, todayStr) {
+  const today = toDay(todayStr);
+  if (kindOf(task) === 'asneeded') return ownerOf(task, null, today, null, ctx);
+  return ownerOf(task, periodsAround(task, ctx, today).cur, today, null, ctx);
 }
 
 // Alle Periodenschlüssel, deren Erledigung für den heutigen Stand relevant ist.

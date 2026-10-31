@@ -24,8 +24,8 @@ export const AREAS = [
 // min: geschätzte Minuten pro Durchgang; note: graue Zeile; perMonth: bei Bedarf geschätzt, wie oft im Monat;
 // when: nur wenn es das im Haushalt gibt (ohne when = Kern).
 // soft: wird angeboten, aber auch bei passender Antwort nicht vorausgewählt (passt nicht zu jedem Haushalt).
-// Zuteilung: Halbjährliches, Jährliches und Bei Bedarf gemeinsam, der Rest geht über autoSplit an die Personen.
-export const defaultAssign = (iv) => (iv.n >= 6 || iv.unit === 'need' ? 'shared' : 'A');
+// Zuteilung: Bei Bedarf gemeinsam, der Rest geht über autoSplit an die Personen.
+export const defaultAssign = (iv) => (iv.unit === 'need' ? 'shared' : 'A');
 const t = (title, iv, area, min, extra = {}) => ({
   title, ...iv, area, min, assign: defaultAssign(iv), note: '', season: null, ...extra,
 });
@@ -89,7 +89,7 @@ export const TEMPLATE = [
   t('Lüftung reinigen', H, 'bad', 15),
 
   // Jährlich
-  t('Ausmisten', Y, 'ordnung', 180, { note: 'Inkl. Keller, Dokumente' }),
+  t('Ausmisten', Y, 'ordnung', 180, { assign: 'shared', note: 'Inkl. Keller, Dokumente' }),
   t('Garten winterfest machen', Y, 'aussen', 120, { when: 'garten', ...season(10, 11) }),
   t('Pflanzen umtopfen', Y, 'pflanzen', 60, { when: 'pflanzen', ...season(3, 5) }),
   t('Balkon winterfest machen', Y, 'aussen', 60, { when: 'balkon', note: 'Pflanzen rein', ...season(9, 11) }),
