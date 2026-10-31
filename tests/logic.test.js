@@ -874,3 +874,19 @@ test('Meine Haushalte: neu nach vorne, Änderung am Platz, ohne Änderung diesel
   assert.equal(upsertHome(two, { ...a }), two);
   assert.deepEqual(upsertHome(two, { ...a, me: 'p2' }).map((h) => [h.code, h.me]), [['B', 'p1'], ['A', 'p2']]);
 });
+
+test('Start in der Zukunft: vorher nichts fällig oder rot, erster Tausch frühestens 2 Wochen danach', () => {
+  const c = moSo({ setup: '2026-11-25', rotateFrom: rotationBase('2026-11-25') });
+  assert.equal(c.rotateFrom, '2026-12');
+  assert.equal(nextSwap(c, '2026-11-03'), '2027-01-01');
+  assert.equal(nextSwap(c, '2026-11-25'), '2027-01-01');
+  const t = wk({ created: '2026-11-25' });
+  assert.equal(windowsBetween(t, c, '2026-11-01', '2026-11-29').length, 0);
+  const before = one(t, c, '2026-11-10');
+  assert.deepEqual([before.status, before.next], ['idle', '2026-11-30']);
+  assert.equal(one(t, c, '2026-11-30').status, 'due');
+  assert.equal(goalResult([t], c, '2026-12-01', new Map()), null); // Startmonat zu kurz
+  assert.deepEqual(weekStreaks([t], c, 'p1', new Map(), '2026-11-25', '2026-11-10'), { current: 0, longest: 0 });
+  // Start mitten im Monat mit genug Zeit: Tausch am nächsten Ersten
+  assert.equal(nextSwap({ rotateFrom: rotationBase('2026-11-10') }, '2026-11-10'), '2026-12-01');
+});
