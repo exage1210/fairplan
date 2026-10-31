@@ -34,7 +34,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.42';
+const APP_VERSION = '2.0.43';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -539,8 +539,25 @@ const weekStart = () => fromDay(toDay(S.today) - weekdayOf(S.today));
 const doneMap = () => new Map([...S.dayComps.map((c) => [c.id, c]), ...S.comps]);
 const myDays = () => S.dayComps.filter((c) => c.by === S.me);
 const isAway = (id, day) => { const a = S.hh.away?.[id]; return !!(a?.from && a?.to && a.from <= day && day <= a.to); };
-const mySeries = () => weekStreaks(S.tasks, S.hh, S.me, doneMap(), S.dayFrom || S.hh.setup, S.today);
+// Nur neu rechnen, wenn sich Daten geändert haben: Die Quellen werden bei jeder Änderung ersetzt, nie verändert
+const whenChanged = (fn) => {
+  let seen = [], value;
+  return () => {
+    const now = [S.tasks, S.hh, S.dayComps, S.comps, S.today, S.dayFrom, S.me];
+    if (now.some((x, i) => x !== seen[i])) { seen = now; value = fn(); }
+    return value;
+  };
+};
+// Serie: höchstens das letzte Jahr, die längste bleibt ohnehin gespeichert
+const seriesFrom = () => [S.dayFrom || S.hh.setup, S.hh.setup, fromDay(toDay(S.today) - 364)].sort().pop();
+const mySeries = whenChanged(() => weekStreaks(S.tasks, S.hh, S.me, doneMap(), seriesFrom(), S.today));
 const weeksText = (n) => (n ? `${n} ${n === 1 ? 'Woche' : 'Wochen'}` : 'Noch keine');
+// Reicht der geprüfte Zeitraum nicht bis zum Start, ist die Serie vielleicht länger: „8+“ auf „Aktuell“, „52+“ sonst
+const seriesText = (n) => {
+  const from = seriesFrom();
+  const cap = toDay(S.today) - toDay(from) > 100 ? 52 : 8;
+  return from > S.hh.setup && n >= cap ? `${cap}+ Wochen` : weeksText(n);
+};
 
 // Eigene Aufgaben pausieren, solange man heute abwesend ist oder ihr Termin in die Abwesenheit fällt.
 // Andere sehen sie weiter und können vertreten.
@@ -579,7 +596,7 @@ function viewToday() {
   const weekCount = inWeek.length - bonus;
   syncStats();
   const { current } = mySeries();
-  const streakText = S.dayFrom > S.hh.setup && current >= 8 ? '8+ Wochen' : weeksText(current);
+  const streakText = seriesText(current);
 
   const next = items.filter((i) => mineItem(i) && !['daily', 'asneeded'].includes(kindOf(i.task)))
     .map((i) => ({ title: i.task.title, date: i.status === 'upcoming' ? i.due : i.next }))
@@ -849,7 +866,7 @@ function celebrate(text, { colors = [person(S.me)?.color], path } = {}) {
 
 // Meilensteine: persönlich, einmal erreicht bleibt erreicht (stats_<id> im Haushalt: { longest, done: { id: Tag }, start })
 const statsOf = (id) => ({ longest: 0, done: {}, start: null, ...S.hh[`stats_${id}`] });
-function milestones() {
+const milestones = whenChanged(() => {
   const mine = S.dayComps.filter((c) => c.by === S.me);
   const tasks = mine.filter((c) => !c.rule), rules = mine.filter((c) => c.rule);
   const st = statsOf(S.me);
@@ -858,7 +875,7 @@ function milestones() {
   const byId = doneMap();
   const months = [];
   for (let d = toDay(monthBounds(S.hh.setup)[0]); d < toDay(monthBounds(S.today)[0]); d = toDay(monthBounds(fromDay(d))[1]) + 1) months.push(monthBounds(fromDay(d)));
-  const whole = months.slice(-24).filter(([a]) => a >= S.dayFrom || S.hh.setup >= S.dayFrom)
+  const whole = st.done.month || months.slice(-24).filter(([a]) => a >= S.dayFrom || S.hh.setup >= S.dayFrom)
     .some(([a, b]) => { const l = dueBetween(S.tasks, S.hh, a, b, byId, S.me); return l.length && l.every((w) => w.done); });
   const joker = jokerOf(S.hh, S.me);
   const goals = Object.keys(S.hh.goalHits || {}).length;
@@ -874,7 +891,7 @@ function milestones() {
     ['goal', 'Gemeinsames Ziel', goals >= 1, 'läuft', MILESTONES.star],
   ].map(([id, name, on, open, path]) => ({ id, name, on: on || !!st.done[id], sub: id === 'goal' && goals ? `${goals}× geschafft` : on || st.done[id] ? 'geschafft' : open, path }));
   return { list, best, current, tasks };
-}
+});
 
 // Erreichtes festhalten; beim ersten Mal still, danach Puls in der Statuskarte und Stern beim ersten Haken
 function syncStats() {
@@ -966,7 +983,7 @@ function viewStats() {
       <div class="bars">${bars}</div>
       <span class="card-open">${trend}</span>
     </section>
-    <div class="tiles2"><div class="stat"><span>Aktuelle Serie</span><b class="a">${weeksText(current)}</b></div><div class="stat"><span>Längste Serie</span><b>${weeksText(best)}</b></div></div>
+    <div class="tiles2"><div class="stat"><span>Aktuelle Serie</span><b class="a">${seriesText(current)}</b></div><div class="stat"><span>Längste Serie</span><b>${seriesText(best)}</b></div></div>
     ${rhythm ? `<h2>Nach Rhythmus</h2><div class="tile pad">${rhythm}</div>` : ''}
     <h2>Meilensteine</h2><div class="badges">${badges}</div>`;
 }
