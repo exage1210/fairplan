@@ -6,7 +6,7 @@ import {
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, inSeason, windowsBetween, awayDuring,
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
   personalWeek, isPressing, goalOf, goalStats, goalResult,
-  jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX,
+  jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX, PACKAGES, isPackage, swapsByRound, upsertHome,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -382,7 +382,7 @@ test('Tausch: Pakete tauschen monatlich, bei mehr Personen reihum', () => {
   assert.deepEqual(['2026-10-20', '2026-11-20', '2026-12-20', '2027-01-20'].map((d) => ownerNow(m, rot(), d)), ['p1', 'p2', 'p1', 'p2']);
   assert.equal(ownerNow(rotTask({ n: 1, unit: 'month', assign: 'B' }), rot(), '2026-11-20'), 'p1');
   const three = { persons: [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }] };
-  assert.deepEqual([0, 1, 2, 3].map((n) => packageOwners(three, n)), [['p1', 'p2'], ['p2', 'p3'], ['p3', 'p1'], ['p1', 'p2']]);
+  assert.deepEqual([0, 1, 2, 3].map((n) => packageOwners(three, n)), [['p1', 'p2', 'p3'], ['p2', 'p3', 'p1'], ['p3', 'p1', 'p2'], ['p1', 'p2', 'p3']]);
 });
 
 test('Tauschtag: wöchentlich zählt der Monat des Putztags, sonst der Beginn der Periode', () => {
@@ -787,4 +787,90 @@ test('Serie: Tägliches zählt nicht, vor dem Ladebereich wird nicht geurteilt',
   assert.equal(weekStreaks([t, d], moSo(), 'p1', m, '2026-11-02', '2026-11-08').current, 1);
   const late = doneKeys(t, '2026-11-16', '2026-11-23');
   assert.equal(weekStreaks([t], moSo(), 'p1', late, '2026-11-11', '2026-11-29').current, 2);
+});
+
+// ---------- Bis zu 6 Personen ----------
+
+const people = (n, days = (i) => [i % 7]) => ({
+  setup: '2026-11-02', rotateFrom: '2026-11', swapped: false, sharedDays: [5],
+  persons: Array.from({ length: n }, (_, i) => ({ id: `p${i + 1}`, days: days(i) })),
+});
+const pkgTask = (assign, over = {}) => wk({ id: assign, assign, ...over });
+
+test('Pakete: A bis F, jede Person eines', () => {
+  assert.equal(PACKAGES.length, 6);
+  assert.equal(isPackage('F'), true);
+  assert.equal(isPackage('shared'), false);
+  assert.deepEqual(packageOwners(people(4)), ['p1', 'p2', 'p3', 'p4']);
+  assert.deepEqual(packageOwners(people(4), 1), ['p2', 'p3', 'p4', 'p1']);
+  assert.deepEqual(['A', 'B', 'C', 'D'].map((a) => ownerNow(pkgTask(a), people(4), '2026-11-03')), ['p1', 'p2', 'p3', 'p4']);
+});
+
+test('Tausch mit 3 Personen: wöchentlich reihum nach dem Monat des Putztags', () => {
+  const c = people(3, () => [0]); // alle am Montag
+  const t = pkgTask('A');
+  assert.deepEqual(['2026-11-30', '2026-12-07', '2027-01-04', '2027-02-01', '2027-03-01'].map((d) => ownerNow(t, c, d)), ['p1', 'p2', 'p3', 'p1', 'p2']);
+  const w = windowsBetween(t, c, '2026-11-23', '2027-01-11');
+  assert.ok(w.slice(1).every((x, i) => toDay(x.start) - toDay(w[i].start) === 7)); // gleicher Putztag: keine Lücke
+  assert.equal(new Set(w.map((x) => x.key)).size, w.length);
+});
+
+test('Tausch mit 3 Personen: nichts bleibt immer bei denselben', () => {
+  const owners = (t, c, dates) => new Set(dates.map((d) => ownerNow(t, c, d)));
+  const c3 = people(3);
+  // vierteljährlich würde bei 3 Personen sonst immer dieselbe treffen
+  assert.equal(swapsByRound(pkgTask('A', { n: 3, unit: 'month' }), c3), true);
+  assert.equal(owners(pkgTask('A', { n: 3, unit: 'month' }), c3, ['2027-01-10', '2027-04-10', '2027-07-10']).size, 3);
+  assert.equal(owners(pkgTask('A', { n: 6, unit: 'month' }), c3, ['2027-01-10', '2027-07-10', '2028-01-10']).size, 3);
+  assert.equal(owners(pkgTask('A', { n: 12, unit: 'month' }), c3, ['2027-02-10', '2028-02-10', '2029-02-10']).size, 3);
+  // bei 2 Personen wie bisher: vierteljährlich nach Monat, halbjährlich je Durchgang
+  assert.equal(swapsByRound(pkgTask('A', { n: 3, unit: 'month' }), people(2)), false);
+  assert.equal(swapsByRound(pkgTask('A', { n: 6, unit: 'month' }), people(2)), true);
+  assert.equal(owners(pkgTask('A', { n: 3, unit: 'month' }), people(4), ['2027-01-10', '2027-04-10', '2027-07-10', '2027-10-10']).size, 4);
+});
+
+test('Faire Aufteilung auf 3 bis 6 Personen: alle haben fast gleich viel Zeit', () => {
+  for (const n of [3, 4, 5, 6]) {
+    const split = autoSplit(OUR_TASKS, n);
+    const c = people(n);
+    const load = Object.values(loadByPerson(split, c));
+    assert.equal(load.length, n);
+    // Unterschied höchstens so groß wie die größte einzelne Aufgabe (Wäsche: 387 Min. pro Monat); der Tausch gleicht das aus
+    assert.ok(Math.max(...load) - Math.min(...load) <= 387, `${n}: ${load}`);
+    assert.ok(split.filter((t) => isPackage(t.assign)).every((t) => PACKAGES.indexOf(t.assign) < n));
+    // Gemeinsames bleibt
+    assert.equal(split.filter((t) => t.assign === 'shared').length, OUR_TASKS.filter((t) => t.assign === 'shared').length);
+  }
+  assert.deepEqual(autoSplit(OUR_TASKS).map((t) => t.assign), autoSplit(OUR_TASKS, 2).map((t) => t.assign));
+  // Ohne eine übergroße Aufgabe wird es sehr gleichmäßig
+  const even = Array.from({ length: 24 }, (_, i) => wk({ id: `e${i}`, min: 10 + (i % 4) * 5 }));
+  const l3 = Object.values(loadByPerson(autoSplit(even, 3), people(3)));
+  assert.ok(Math.max(...l3) - Math.min(...l3) <= 25 * 4.3, String(l3));
+});
+
+test('Aufwand, Ziel, Joker und Serie mit 4 Personen', () => {
+  const c = people(4, () => [0]);
+  const tasks = ['A', 'B', 'C', 'D'].map((a) => pkgTask(a, { fixed: true }));
+  assert.deepEqual(Object.values(loadByPerson(tasks, c)).map(Math.round), [0, 0, 0, 0]);
+  const timed = tasks.map((t) => ({ ...t, min: 60 }));
+  assert.deepEqual(Object.values(loadByPerson(timed, c)).map(Math.round), [258, 258, 258, 258]);
+  assert.equal(goalStats(tasks, c, '2026-11', new Map()).total, 20);
+  const m = new Map([[completionId('C', 'weekly:2026-11-02', null), { by: 'p3' }]]);
+  assert.equal(weekStreaks(tasks, c, 'p3', m, '2026-11-02', '2026-11-08').current, 1);
+  assert.equal(weekStreaks(tasks, c, 'p1', m, '2026-11-02', '2026-11-08').current, 0);
+  assert.deepEqual(['2026-11-02', '2026-12-07'].map((d) => ownerNow(pkgTask('D'), c, d)), ['p4', 'p1']);
+  const shared = wk({ assign: 'shared' });
+  const away = { p1: { from: '2026-11-07', to: '2026-11-08' } };
+  assert.equal(goalStats([shared], { ...c, away }, '2026-11', new Map()).total, 4); // nur eine weg: bleibt
+});
+
+test('Meine Haushalte: neu nach vorne, Änderung am Platz, ohne Änderung dieselbe Liste', () => {
+  const a = { code: 'A', names: 'Ana, Ben', me: 'p1', setup: '2026-11-02' };
+  const b = { code: 'B', names: 'Ana, Ben, Cleo', me: 'p1', setup: '2026-12-01' };
+  const one = upsertHome([], a);
+  assert.deepEqual(one, [a]);
+  const two = upsertHome(one, b);
+  assert.deepEqual(two.map((h) => h.code), ['B', 'A']);
+  assert.equal(upsertHome(two, { ...a }), two);
+  assert.deepEqual(upsertHome(two, { ...a, me: 'p2' }).map((h) => [h.code, h.me]), [['B', 'p1'], ['A', 'p2']]);
 });
