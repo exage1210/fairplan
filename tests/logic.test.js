@@ -4,7 +4,7 @@ import { TEMPLATE, TEMPLATE_RULES, suggestTasks, suggestRules, OUR_TASKS, OUR_RU
 import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, inSeason, windowsBetween, awayDuring,
-  timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, streaks,
+  timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
   personalWeek, isPressing, goalOf, goalStats, goalResult,
   jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX,
 } from '../js/logic.js';
@@ -263,14 +263,6 @@ test('Feiertage Österreich inkl. Ostern', () => {
   assert.equal(h.get('2026-06-04'), 'Fronleichnam');
   assert.equal(h.get('2026-10-26'), 'Nationalfeiertag');
   assert.equal(holidays(2027).get('2027-03-29'), 'Ostermontag');
-});
-
-test('streaks: heute darf fehlen, Lücke bricht, Abwesenheit nicht', () => {
-  assert.deepEqual(streaks([], '2026-11-10'), { current: 0, longest: 0 });
-  assert.deepEqual(streaks(['2026-11-08', '2026-11-09'], '2026-11-10'), { current: 2, longest: 2 });
-  assert.deepEqual(streaks(['2026-11-08', '2026-11-09', '2026-11-10'], '2026-11-10'), { current: 3, longest: 3 });
-  assert.deepEqual(streaks(['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-09'], '2026-11-10'), { current: 1, longest: 3 });
-  assert.deepEqual(streaks(['2026-11-06', '2026-11-09'], '2026-11-10', (d) => d === '2026-11-07' || d === '2026-11-08'), { current: 2, longest: 2 });
 });
 
 test('dueBetween: eigene und gemeinsame im Bereich, fremd Erledigtes fällt heraus', () => {
@@ -740,4 +732,59 @@ test('Joker und Balken: verschoben fällt raus, drängt nicht', () => {
   assert.equal(dueBetween([t], c, '2026-11-09', '2026-11-15', new Map(), 'p1').length, 0);
   assert.equal(windowsBetween(t, c, '2026-11-09', '2026-11-15').find((w) => w.start === '2026-11-09').deferred, true);
   assert.equal(isPressing(one(t, c, '2026-11-09', [['weekly:2026-11-02', null]]), '2026-11-09'), false);
+});
+
+// ---------- Serie in Wochen ----------
+
+const fixMo = () => wk({ fixed: true }); // p1, jeden Montag
+const doneKeys = (t, ...keys) => new Map(keys.map((k) => [completionId(t.id, `weekly:${k}`, null), { by: 'p1' }]));
+
+test('Serie: volle Wochen zählen, verpasste bricht, längste bleibt', () => {
+  const t = fixMo();
+  const none = weekStreaks([t], moSo(), 'p1', new Map(), '2026-11-02', '2026-11-20');
+  assert.deepEqual(none, { current: 0, longest: 0 });
+  const m = doneKeys(t, '2026-11-02', '2026-11-09', '2026-11-23');
+  // 2.11. und 9.11. erledigt, 16.11. verpasst (Frist bis 22.11.), 23.11. erledigt
+  assert.deepEqual(weekStreaks([t], moSo(), 'p1', m, '2026-11-02', '2026-11-29'), { current: 1, longest: 2 });
+});
+
+test('Serie: laufende Woche bricht nicht, erledigt zählt sie gleich', () => {
+  const t = fixMo();
+  const m = doneKeys(t, '2026-11-02', '2026-11-09');
+  // 16.11. läuft bis 22.11.: noch nicht gebrochen
+  assert.equal(weekStreaks([t], moSo(), 'p1', m, '2026-11-02', '2026-11-18').current, 2);
+  assert.equal(weekStreaks([t], moSo(), 'p1', m, '2026-11-02', '2026-11-22').current, 2);
+  assert.equal(weekStreaks([t], moSo(), 'p1', m, '2026-11-02', '2026-11-23').current, 0);
+  assert.equal(weekStreaks([t], moSo(), 'p1', new Map([...m, ...doneKeys(t, '2026-11-16')]), '2026-11-02', '2026-11-18').current, 3);
+});
+
+test('Serie: Abwesenheit und Joker unterbrechen nicht', () => {
+  const t = fixMo();
+  const m = doneKeys(t, '2026-11-02', '2026-11-16');
+  assert.equal(weekStreaks([t], moSo(), 'p1', m, '2026-11-02', '2026-11-22').current, 1); // 9.11. verpasst
+  const away = moSo({ away: { p1: { from: '2026-11-09', to: '2026-11-12' } } });
+  assert.equal(weekStreaks([t], away, 'p1', m, '2026-11-02', '2026-11-22').current, 2);
+  const joker = withJoker(moSo(), 'p1', completionId('w', 'weekly:2026-11-09', null));
+  assert.equal(weekStreaks([t], joker, 'p1', m, '2026-11-02', '2026-11-22').current, 2);
+});
+
+test('Serie: eigene Woche ab dem Putztag, andere Person und Gemeinsames', () => {
+  const b = wk({ assign: 'B', fixed: true }); // p2, jeden Sonntag
+  const m = new Map([...doneKeys(b, '2026-11-02', '2026-11-09')].map(([k, c]) => [k, { ...c, by: 'p2' }]));
+  // Termine 8.11. und 15.11. liegen in den Wochen ab So 8.11. und So 15.11.
+  assert.equal(weekStreaks([b], moSo(), 'p2', m, '2026-11-02', '2026-11-21').current, 2);
+  assert.equal(weekStreaks([b], moSo(), 'p1', m, '2026-11-02', '2026-11-21').current, 0); // p1 hat nichts
+  const s = wk({ id: 's', assign: 'shared' });
+  const c = moSo({ sharedDays: [0] });
+  const sm = new Map([[completionId('s', 'weekly:2026-11-02', null), { by: 'p1' }]]);
+  assert.equal(weekStreaks([s], c, 'p1', sm, '2026-11-02', '2026-11-08').current, 1);
+});
+
+test('Serie: Tägliches zählt nicht, vor dem Ladebereich wird nicht geurteilt', () => {
+  const t = fixMo();
+  const d = wk({ id: 'd', n: 1, unit: 'day' });
+  const m = doneKeys(t, '2026-11-02');
+  assert.equal(weekStreaks([t, d], moSo(), 'p1', m, '2026-11-02', '2026-11-08').current, 1);
+  const late = doneKeys(t, '2026-11-16', '2026-11-23');
+  assert.equal(weekStreaks([t], moSo(), 'p1', late, '2026-11-11', '2026-11-29').current, 2);
 });
