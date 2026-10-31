@@ -3,7 +3,7 @@ import {
   localToday, toDay, fromDay, windowsBetween, awayDuring,
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
-  goalOf, goalStats, goalResult,
+  goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED, GOAL_REWARDS } from './template.js';
@@ -33,7 +33,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.37';
+const APP_VERSION = '2.0.38';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -397,7 +397,7 @@ function statusText(it) {
   const c = it.completion;
   switch (it.status) {
     case 'overdue': return lateText(it);
-    case 'due': return kindOf(it.task) === 'daily' ? '' : `dran bis ${fmtDate(it.end)}`;
+    case 'due': return kindOf(it.task) === 'daily' ? '' : `${it.deferred ? 'verschoben, ' : ''}dran bis ${fmtDate(it.end)}`;
     case 'upcoming': return `dran ${rangeLabel(it.due, it.end)}`;
     case 'done': {
       return `erledigt von ${byWho(c.by)}${forWhom(c)} · ${fmtDate(c.day)}, ${timeOf(c)}`;
@@ -431,6 +431,7 @@ const lateText = (it) => `<span class="${it.owner === S.me || it.owner === null 
 // Termin-Zusatz für „Aktuell“: „seit … offen“, „bis Sa“, „ab Mo 2.11.“ – bei „Heute“ nichts
 function whenText(it) {
   if (it.status === 'overdue') return lateText(it);
+  if (it.deferred && it.status === 'due') return `verschoben, bis ${dayLabel(it.end)}`;
   if (it.status === 'upcoming') return `${dayLabel(it.due)}, bis ${dayLabel(it.end)}`;
   if (it.status === 'idle' && it.next) return `ab ${dayLabel(it.next)}`;
   if (it.status === 'due' && it.end > S.today) return `bis ${dayLabel(it.end)}`;
@@ -454,12 +455,15 @@ function nowRow(it, sub = '') {
   const locked = done && by !== S.me;
   const off = !it.key; // nächster Termin liegt in einer späteren Periode → noch nicht abhakbar
   const extra = [it.owner === null && !done ? 'Gemeinsam' : '', t.note ? esc(t.note) : '', sub].filter(Boolean).join(' · ');
+  // Joker erst anbieten, wenn es knapp wird: sonst stünde der Knopf bei jeder Aufgabe
+  const joker = it.owner === S.me && canJoker(it, S.today) && jokerOf(S.hh, S.me).count > 0 && toDay(it.end) - toDay(S.today) <= 2
+    ? `<button class="jokerbtn" data-action="joker" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}">Joker: 1 Woche später</button>` : '';
   return swipeRow({
     done, locked, off, by,
     check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}"
       ${done ? 'checked' : ''} ${off || locked ? 'disabled' : ''} aria-label="${esc(t.title)} erledigt">`,
     body: `<div class="body"><div class="head"><span class="title">${esc(t.title)}</span><span class="kind">${iv}</span></div>
-      ${extra ? `<div class="meta">${extra}</div>` : ''}${stepsBlock(it)}</div>`,
+      ${extra ? `<div class="meta">${extra}</div>` : ''}${stepsBlock(it)}${joker}</div>`,
   });
 }
 
@@ -582,11 +586,13 @@ function viewToday() {
   const swap = nextSwap(S.hh, S.today);
   const goal = goalOf(S.hh);
   const goalNow = goalStats(S.tasks, S.hh, S.today.slice(0, 7), doneMap());
+  const myJoker = jokerOf(S.hh, S.me);
+  const jokerLabel = myJoker.count ? `${myJoker.count} Joker` : rules.length ? `noch ${JOKER_PRICE - myJoker.progress} bis Joker` : '';
 
   const card = `${goalNote()}${swapNote()}<section class="card ${allDone ? 'alldone' : ''}">
       <div><span class="card-label">Deine Aufgaben heute</span>
         <span class="card-big">${x}<small> / ${y}</small></span></div>
-      ${weekAll || bonus ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus ? `<span class="pill">+${bonus} extra</span>` : ''}</div>
+      ${weekAll || bonus || jokerLabel ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus || jokerLabel ? `<span class="pill">${[bonus ? `+${bonus} extra` : '', jokerLabel].filter(Boolean).join(' · ')}</span>` : ''}</div>
         ${weekAll ? `<div class="bar"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div>` : ''}</div>` : ''}
       <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : pressing.length ? `Noch ${pressing.length} offen` : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.'}</span>
       ${goalNow.total ? `<span class="card-next">Gemeinsam: ${goalNow.percent} % von ${goal.percent} %${goal.reward ? ` · ${esc(goal.reward)}` : ''}</span>` : ''}
@@ -754,14 +760,14 @@ function dayDetail(sel, doneOn, holiday) {
   const byId = doneMap();
   const wins = S.tasks.flatMap((t) => windowsBetween(t, S.hh, sel, sel)).filter((w) => kindOf(w.task) !== 'daily'
     && !byId.has(completionId(w.task.id, w.key, w.slot)) && !paused(w)
-    && (past ? w.end === sel && w.start >= S.dayFrom : sel === S.today ? w.start <= sel : w.start === sel));
+    && (past ? w.end === sel && w.start >= S.dayFrom : sel === S.today ? w.start <= sel : w.deferred ? w.end === sel : w.start === sel));
   wins.sort(byMeFirst);
   const done = (doneOn.get(sel) || []).slice().sort((a, b) => a.at.localeCompare(b.at));
 
   const planned = wins.map((w) => {
     const p = person(w.owner);
     return `<div class="drow"><span class="ring" style="--pc:${dotOf(w.owner)}"></span><span class="t">${esc(w.task.title)}</span>
-      <span class="who">${p ? byName(p.id) : 'Gemeinsam'}</span></div>`;
+      <span class="who">${p ? byName(p.id) : 'Gemeinsam'}${w.deferred ? ' · verschoben' : ''}</span></div>`;
   }).join('');
   const doneRows = done.map((c) => {
     const p = person(c.by);
@@ -795,9 +801,10 @@ function nextTwoWeeks() {
     add(fromDay(Math.max(first, toDay(a.from))), `<li class="away"><i style="--pc:var(--d-${p.color})"></i><span class="by" data-c="${p.color}">${esc(p.name)} abwesend bis ${fmtDate(a.to)}</span></li>`);
   }
   const wins = S.tasks.flatMap((t) => windowsBetween(t, S.hh, fromDay(first), fromDay(last)))
-    .filter((w) => kindOf(w.task) !== 'daily' && toDay(w.start) >= first && !byId.has(completionId(w.task.id, w.key, w.slot)) && !paused(w))
+    .filter((w) => kindOf(w.task) !== 'daily' && toDay(w.deferred ? w.end : w.start) >= first && toDay(w.deferred ? w.end : w.start) <= last
+      && !byId.has(completionId(w.task.id, w.key, w.slot)) && !paused(w))
     .sort(byMeFirst);
-  for (const w of wins) add(w.start, `<li><i style="--pc:${dotOf(w.owner)}"></i><span>${esc(w.task.title)}</span></li>`);
+  for (const w of wins) add(w.deferred ? w.end : w.start, `<li><i style="--pc:${dotOf(w.owner)}"></i><span>${esc(w.task.title)}${w.deferred ? ' · verschoben' : ''}</span></li>`);
   const rows = [...days.keys()].sort().map((ds) => `<div class="urow"><div class="d"><small>${WEEKDAYS[weekdayOf(ds)]}</small><b>${fmtDate(ds, false)}</b></div><ul>${days.get(ds).join('')}</ul></div>`).join('');
   return `<h2>Nächste 2 Wochen</h2>${rows ? `<div class="tile pad">${rows}</div><span class="hint">Ohne tägliche Aufgaben.</span>` : '<p class="none">Nichts geplant.</p>'}`;
 }
@@ -1367,10 +1374,36 @@ function reopen(id, title) {
   if (!confirm(`„${title}“ wieder öffnen?`)) return false;
   const prev = S.comps.get(id) || S.dayComps.find((c) => c.id === id);
   S.store.removeCompletion(S.code, id);
+  if (prev?.rule && prev.by === S.me) countRule(-1);
   const task = S.tasks.find((t) => t.id === prev?.taskId);
   (task?.steps || []).forEach((_, i) => S.store.removeCompletion(S.code, `${id}__s${i}`));
   snack('Wieder offen.');
   return true;
+}
+
+// Joker: gleich anzeigen, auch bevor der Haushalt zurückkommt
+function saveJoker(j) {
+  const field = `joker_${S.me}`;
+  S.hh = { ...S.hh, [field]: j };
+  updateHH({ [field]: j });
+}
+// Eigene Abmachung zählt für den Joker; true, wenn dadurch einer verdient ist
+function countRule(delta) {
+  const j = jokerOf(S.hh, S.me);
+  const next = jokerTick(j, delta);
+  if (next !== j) saveJoker(next);
+  return next.count > j.count;
+}
+function playJoker(el) {
+  const task = S.tasks.find((t) => t.id === el.dataset.task);
+  const slot = el.dataset.slot || null;
+  const it = task && evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
+  const j = jokerOf(S.hh, S.me);
+  if (!it || it.owner !== S.me || !j.count || !canJoker(it, S.today)) return;
+  saveJoker(useJoker(j, completionId(task.id, it.termKey, slot), S.today));
+  haptic();
+  snack(`Verschoben bis ${dayLabel(fromDay(toDay(it.end) + 7))}.`, () => { saveJoker(j); render(); });
+  render();
 }
 
 function toggleRule(input) {
@@ -1382,7 +1415,8 @@ function toggleRule(input) {
       by: S.me, at: new Date().toISOString(), day: S.today, rule: true,
     });
     haptic();
-    snack('Erledigt.', () => S.store.removeCompletion(S.code, id));
+    const earned = countRule(1);
+    snack(earned ? 'Joker verdient!' : 'Erledigt.', () => { S.store.removeCompletion(S.code, id); countRule(-1); });
   } else if (!reopen(id, title)) input.checked = true;
 }
 
@@ -1586,6 +1620,7 @@ app.addEventListener('click', (e) => {
   }
   if (d.setup) return setupAction(d.setup);
   switch (d.action) {
+    case 'joker': return playJoker(el);
     case 'swap-seen': ls.set('swap-seen', S.today.slice(0, 7)); return render();
     case 'goal-seen': ls.set('goal-seen', goalResult(S.tasks, S.hh, S.today, doneMap())?.month ?? null); return render();
     case 'rule-add': S.addRule = true; render(); $('#newRule')?.focus(); return;

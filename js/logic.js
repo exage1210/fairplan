@@ -361,6 +361,39 @@ function periodsAround(task, ctx, today) {
   return { scheme, i, cur: gap ? null : cur, prev };
 }
 
+// ---------- Joker ----------
+
+// Pro Person ein Feld im Haushalt, joker_<id> = { progress, count, earned, deferred: { <completionId des Termins>: Tag } }.
+// So schreibt jede Person nur ihr eigenes Feld, und Statistik und Verlauf bleiben unberührt.
+export const JOKER_PRICE = 30;
+export const JOKER_MAX = 3;
+const JOKER_DAYS = 7;
+export const jokerOf = (ctx, id) => ({ progress: 0, count: 0, earned: 0, deferred: {}, ...ctx[`joker_${id}`] });
+const isDeferred = (ctx, owner, id) => owner != null && !!ctx[`joker_${owner}`]?.deferred?.[id];
+
+// Eigene Abmachung erledigt (+1) oder zurückgenommen (-1). Bei vollem Vorrat zählt nichts weiter.
+export function jokerTick(j, delta) {
+  if (delta > 0) {
+    if (j.count >= JOKER_MAX) return j;
+    return j.progress + 1 >= JOKER_PRICE
+      ? { ...j, progress: 0, count: j.count + 1, earned: j.earned + 1 }
+      : { ...j, progress: j.progress + 1 };
+  }
+  if (j.progress > 0) return { ...j, progress: j.progress - 1 };
+  if (j.count === 0 || j.count >= JOKER_MAX) return j;
+  return { ...j, progress: JOKER_PRICE - 1, count: j.count - 1, earned: Math.max(0, j.earned - 1) };
+}
+
+// Joker möglich? Offen, mit Person, nicht Tägliches oder Bei Bedarf, und die neue Frist liegt nicht schon hinter uns.
+export const canJoker = (item, todayStr) => ['due', 'overdue'].includes(item.status) && item.owner != null && !item.deferred
+  && !['daily', 'asneeded'].includes(kindOf(item.task)) && toDay(item.end) + JOKER_DAYS >= toDay(todayStr);
+
+// Joker einsetzen: Verbrauch und Merker; Einträge älter als 120 Tage fallen weg.
+export function useJoker(j, termId, todayStr) {
+  const deferred = Object.fromEntries(Object.entries(j.deferred).filter(([, d]) => toDay(todayStr) - toDay(d) <= 120));
+  return { ...j, count: j.count - 1, deferred: { ...deferred, [termId]: todayStr } };
+}
+
 // Persönliche Woche: Wöchentliches und „alle 2 Wochen“ laufen vom Termin bis zum Tag vor dem nächsten, ohne Spielraum.
 export const isRolling = (task) => ['weekly', 'biweekly'].includes(kindOf(task));
 
@@ -386,7 +419,8 @@ function rollingTerms(task, ctx, slot, fromI, toI) {
   }
   return terms.map((x, n) => {
     const next = terms[n + 1];
-    return { ...x, end: next && next.due - x.due <= 2 * len ? next.due - 1 : x.due + len - 1 };
+    const def = isDeferred(ctx, x.owner, completionId(task.id, x.key, slot));
+    return { ...x, def, end: (next && next.due - x.due <= 2 * len ? next.due - 1 : x.due + len - 1) + (def ? JOKER_DAYS : 0) };
   }).filter((x) => x.k <= toI);
 }
 const rollingAround = (task, ctx, slot, today) => {
@@ -404,7 +438,7 @@ export function personalWeek(days, todayStr) {
 
 // Drängt heute? Vergessenes immer; Wöchentliches und „alle 2 Wochen“ nur am Termin und am Tag danach.
 export const isPressing = (item, todayStr) => item.status === 'overdue'
-  || (item.status === 'due' && (!isRolling(item.task) || toDay(todayStr) <= toDay(item.due) + 1));
+  || (item.status === 'due' && !item.deferred && (!isRolling(item.task) || toDay(todayStr) <= toDay(item.due) + 1));
 
 // Wer ist heute für die laufende Periode zuständig?
 export function ownerNow(task, ctx, todayStr) {
@@ -479,7 +513,8 @@ export function evaluate(task, ctx, todayStr, completions) {
     const at = (p) => {
       const owner = ownerOf(task, p, p.start, slot, ctx);
       const due = dueDay(task, p, ctx, owner);
-      return { p, owner, due, end: due === null ? null : due + slack, counts: due !== null && due >= start };
+      const def = isDeferred(ctx, owner, completionId(task.id, p.key, slot));
+      return { p, owner, due, def, end: due === null ? null : due + slack + (def ? JOKER_DAYS : 0), counts: due !== null && due >= start };
     };
     const nextDue = () => {
       for (let k = i + 1; k < i + 400; k++) {
@@ -490,7 +525,7 @@ export function evaluate(task, ctx, todayStr, completions) {
     };
     const item = { task, slot, owner: null, status: 'idle', key: null, due: null, end: null, completion: null, next: null };
     const set = (status, x, key, extra = {}) => Object.assign(item, {
-      status, key, owner: x.owner, due: fromDay(x.due), end: fromDay(x.end), ...extra,
+      status, key, owner: x.owner, due: fromDay(x.due), end: fromDay(x.end), termKey: x.p.key, deferred: !!x.def, ...extra,
     });
     const idle = () => {
       const n = nextDue();
@@ -550,7 +585,7 @@ function evaluateRolling(task, ctx, todayStr, completions) {
     };
     const item = { task, slot, owner: null, status: 'idle', key: null, due: null, end: null, completion: null, next: null };
     const set = (status, x, key, extra = {}) => Object.assign(item, {
-      status, key, owner: x.owner, due: fromDay(x.due), end: fromDay(x.end), ...extra,
+      status, key, owner: x.owner, due: fromDay(x.due), end: fromDay(x.end), termKey: x.key, deferred: !!x.def, ...extra,
     });
     const idle = () => {
       const n = after(today);
@@ -567,8 +602,9 @@ function evaluateRolling(task, ctx, todayStr, completions) {
     }
     const open = (x) => x && !paused(ctx, x.owner, x.due, x.end) && !get(x);
     if (cur && !get(cur)) {
-      // voriger Termin verpasst: einmal überfällig, bei der Person, die ihn verpasst hat; Abhaken zählt für den laufenden
-      if (open(prv)) return set('overdue', prv, cur.key);
+      // voriger Termin verpasst: einmal überfällig, bei der Person, die ihn verpasst hat; Abhaken zählt für den laufenden.
+      // Mit Joker läuft seine Frist noch: bleibt bei dieser Person und deckt die neue Runde mit ab.
+      if (open(prv)) return set(today <= prv.end ? 'due' : 'overdue', prv, cur.key);
       if (today <= cur.end) return set('due', cur, cur.key);
       if (paused(ctx, cur.owner, cur.due, cur.end)) return idle();
       return set('overdue', cur, cur.key);
@@ -591,7 +627,7 @@ export function windowsBetween(task, ctx, fromStr, toStr) {
     const scheme = periodScheme(task, toDay(ctx.setup));
     return slotsOf(task, ctx).flatMap((slot) => rollingTerms(task, ctx, slot, scheme.indexAt(from) - 2, scheme.indexAt(to) + 1)
       .filter((x) => x.counts && x.due <= to && x.end >= from)
-      .map((x) => ({ task, slot, owner: x.owner, key: x.key, start: fromDay(x.due), end: fromDay(x.end) })));
+      .map((x) => ({ task, slot, owner: x.owner, key: x.key, start: fromDay(x.due), end: fromDay(x.end), deferred: x.def })));
   }
   const start = startOf(task, ctx);
   const slack = slackOf(task);
@@ -602,8 +638,10 @@ export function windowsBetween(task, ctx, fromStr, toStr) {
     for (const slot of slotsOf(task, ctx)) {
       const owner = ownerOf(task, p, p.start, slot, ctx);
       const due = dueDay(task, p, ctx, owner);
-      if (due === null || due < start || due > to || due + slack < from) continue;
-      out.push({ task, slot, owner, key: p.key, start: fromDay(due), end: fromDay(due + slack) });
+      const def = isDeferred(ctx, owner, completionId(task.id, p.key, slot));
+      const end = due === null ? null : due + slack + (def ? JOKER_DAYS : 0);
+      if (due === null || due < start || due > to || end < from) continue;
+      out.push({ task, slot, owner, key: p.key, start: fromDay(due), end: fromDay(end), deferred: def });
     }
   }
   return out;
@@ -621,6 +659,7 @@ export function dueBetween(tasks, ctx, fromStr, toStr, doneById, me) {
       if (w.start < fromStr || (w.owner !== me && w.owner !== null)) continue;
       const c = doneById.get(completionId(task.id, w.key, w.slot)) || null;
       if (c && c.by !== me) continue;
+      if (!c && w.deferred) continue; // mit Joker verschoben: zählt erst, wenn erledigt
       if (!c && paused(ctx, w.owner, toDay(w.start), toDay(w.end))) continue;
       out.push({ ...w, done: c });
     }
@@ -641,8 +680,11 @@ export function goalStats(tasks, ctx, month, doneById) {
   for (const task of tasks) {
     if (kindOf(task) === 'daily') continue;
     for (const w of windowsBetween(task, ctx, from, to)) {
-      if (w.start < from) continue;
+      // Mit Joker Verschobenes zählt erst, wenn erledigt, und im Monat seiner neuen Frist
+      const anchor = w.deferred ? w.end : w.start;
+      if (anchor < from || anchor > to) continue;
       const hit = doneById.has(completionId(task.id, w.key, w.slot));
+      if (!hit && w.deferred) continue;
       if (!hit && paused(ctx, w.owner, toDay(w.start), toDay(w.end))) continue;
       total++;
       if (hit) done++;
