@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { TEMPLATE, TEMPLATE_RULES, CORE_TASKS, CORE_RULES, OUR_TASKS, OUR_RULES, AREAS } from '../js/template.js';
 import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
   packageOwners, inSeason, windowsBetween, awayDuring,
@@ -287,4 +288,58 @@ test('dueBetween: Pausiertes zählt nicht, Termine außerhalb auch nicht', () =>
   const tasks = [{ id: 'a', n: 1, unit: 'week', assign: 'A', created: '2026-10-05' }];
   assert.equal(dueBetween(tasks, ctx, '2026-11-09', '2026-11-15', new Map(), 'p1').length, 0);
   assert.equal(dueBetween(tasks, { ...ctx, away: {} }, '2026-11-09', '2026-11-13', new Map(), 'p1').length, 0);
+});
+
+const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≠ ${b}`);
+
+test('Saison mit zwei Zeiträumen: Frühling und Herbst, Termine nur dort', () => {
+  const season = { from: 3, to: 5, from2: 9, to2: 11 };
+  assert.ok(inSeason(season, 4));
+  assert.ok(inSeason(season, 10));
+  assert.ok(!inSeason(season, 1));
+  assert.ok(!inSeason(season, 7));
+  const t = task({ n: 6, unit: 'month', season, created: '2026-01-01' });
+  const c = ctx({ setup: '2027-01-01' });
+  const months = windowsBetween(t, c, '2027-01-01', '2028-12-31').map((w) => +w.start.slice(5, 7));
+  assert.deepEqual(months, [3, 9, 3, 9]);
+  assert.equal(one(t, c, '2027-01-15').status, 'offseason');
+  near(timesPerMonth(t), 2 / 12);
+});
+
+test('Saison kürzt seltene Aufgaben nicht: jährlich bleibt 1× pro Jahr, monatlich anteilig', () => {
+  near(timesPerMonth(task({ n: 12, unit: 'month', season: { from: 3, to: 5 } })), 1 / 12);
+  near(timesPerMonth(task({ n: 1, unit: 'month', season: { from: 3, to: 10 } })), 8 / 12);
+  near(timesPerMonth(task({ n: 3, unit: 'month', season: { from: 3, to: 5 } })), 2 / 12);
+  near(timesPerMonth(task({ n: 1, unit: 'week', season: { from: 10, to: 11 } })), 4.3 * 2 / 12);
+});
+
+test('Aufteilung nach Zeit: beide fast gleich viel, Wöchentliches so gleich wie möglich', () => {
+  const load = loadByPerson(autoSplit(OUR_TASKS), ctx());
+  const week = (x) => x / 4.3 / 60;
+  assert.ok(Math.abs(week(load.p1) - week(load.p2)) < 0.1, `${week(load.p1)} vs ${week(load.p2)}`);
+  const weekly = autoSplit(OUR_TASKS).filter((t) => t.n === 1 && t.unit === 'week');
+  const sum = (a) => weekly.filter((t) => t.assign === a).reduce((s, t) => s + t.min, 0);
+  assert.equal(Math.abs(sum('A') - sum('B')), 30); // Wäsche 90 gegen 60
+});
+
+test('Vorlage: vollständig, Kern und unser Plan passen', () => {
+  const areas = AREAS.map((a) => a[0]);
+  for (const t of TEMPLATE) {
+    assert.ok(areas.includes(t.area), t.title);
+    assert.ok(t.min > 0, t.title);
+    if (t.unit === 'need') assert.ok(t.perMonth > 0, t.title);
+  }
+  assert.equal(new Set(TEMPLATE.map((t) => t.title)).size, TEMPLATE.length);
+  const ctx2 = ctx();
+  const hoursPerWeek = (list) => Object.values(loadByPerson(list, ctx2)).reduce((a, b) => a + b, 0) / 4.3 / 60;
+  assert.ok(Math.abs(hoursPerWeek(OUR_TASKS) - 4.4) < 0.1, `${hoursPerWeek(OUR_TASKS)}`);
+  assert.ok(CORE_TASKS.every((t) => !t.when));
+  const titles = OUR_TASKS.map((t) => t.title);
+  assert.ok(!titles.some((x) => x.startsWith('Garten') || x.startsWith('Haustier') || x.includes('Balkon')));
+  assert.ok(titles.includes('Loggia kehren') && titles.includes('Wäsche inkl. Bügeln') && titles.includes('Kind: Kindersitz waschen'));
+  const bett = OUR_TASKS.find((t) => t.title === 'Bett neu beziehen');
+  assert.deepEqual([bett.n, bett.unit], [1, 'month']);
+  assert.ok(!OUR_RULES.includes('Haustier: Näpfe reinigen') && OUR_RULES.includes('Pflanzen gießen bei Hitze'));
+  assert.equal(TEMPLATE_RULES.length, 10);
+  assert.equal(CORE_RULES.length, 7);
 });
