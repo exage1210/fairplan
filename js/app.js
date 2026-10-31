@@ -1,7 +1,7 @@
 import {
   KINDS, PRESETS, kindOf, evaluate, inSeason, relevantKeys, completionId,
   localToday, toDay, fromDay, windowsBetween, awayDuring,
-  monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
+  monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, weekStreaks,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
   goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE,
 } from './logic.js';
@@ -33,7 +33,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.38';
+const APP_VERSION = '2.0.39';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -279,9 +279,10 @@ function refreshCompletions() {
 // Standard 62 Tage für Serie und Woche; Plan und Statistik holen bei Bedarf mehr.
 function ensureDays(from) {
   if (S.dayFrom && S.dayFrom <= from) return;
+  if (!S.dayFrom) S.daysReady = false;
   S.dayFrom = from;
   S.daySub?.();
-  S.daySub = S.store.watchDays(S.code, from, '9999-12-31', (list) => { S.dayComps = list.filter((c) => c.step == null); render(); });
+  S.daySub = S.store.watchDays(S.code, from, '9999-12-31', (list) => { S.dayComps = list.filter((c) => c.step == null); S.daysReady = true; render(); });
 }
 
 // ---------- Rendern ----------
@@ -535,8 +536,8 @@ const weekStart = () => fromDay(toDay(S.today) - weekdayOf(S.today));
 const doneMap = () => new Map([...S.dayComps.map((c) => [c.id, c]), ...S.comps]);
 const myDays = () => S.dayComps.filter((c) => c.by === S.me);
 const isAway = (id, day) => { const a = S.hh.away?.[id]; return !!(a?.from && a?.to && a.from <= day && day <= a.to); };
-const myStreaks = () => streaks(myDays().map((c) => c.day), S.today, (d) => isAway(S.me, d));
-const daysText = (n) => (n ? `${n} ${n === 1 ? 'Tag' : 'Tage'}` : 'Noch keine');
+const mySeries = () => weekStreaks(S.tasks, S.hh, S.me, doneMap(), S.dayFrom || S.hh.setup, S.today);
+const weeksText = (n) => (n ? `${n} ${n === 1 ? 'Woche' : 'Wochen'}` : 'Noch keine');
 
 // Eigene Aufgaben pausieren, solange man heute abwesend ist oder ihr Termin in die Abwesenheit fällt.
 // Andere sehen sie weiter und können vertreten.
@@ -573,8 +574,9 @@ function viewToday() {
   const inWeek = myDays().filter((c) => c.day >= myFrom && c.day <= myTo);
   const bonus = inWeek.filter((c) => c.rule).length;
   const weekCount = inWeek.length - bonus;
-  const { current } = myStreaks();
-  const streakText = S.dayFrom > S.hh.setup && current >= 60 ? '60+ Tage' : daysText(current);
+  syncStats();
+  const { current } = mySeries();
+  const streakText = S.dayFrom > S.hh.setup && current >= 8 ? '8+ Wochen' : weeksText(current);
 
   const next = items.filter((i) => mineItem(i) && !['daily', 'asneeded'].includes(kindOf(i.task)))
     .map((i) => ({ title: i.task.title, date: i.status === 'upcoming' ? i.due : i.next }))
@@ -602,8 +604,8 @@ function viewToday() {
       <div class="duo"><div><span>Deine Woche</span><b>${weekCount} erledigt</b></div>
         <div><span>Serie</span><b>${current ? `${streakText} in Folge` : streakText}</b></div></div>
     </section>
-    ${allDone && !meAway ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${animalSvg(me.color)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
-  S.cheered = allDone; // Tier nur beim ersten Mal einblenden, nicht bei jedem Neuzeichnen
+    ${allDone && !meAway ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${starSvg(`var(--c-${me.color})`, !S.cheered)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
+  S.cheered = allDone; // Stern nur beim ersten Mal zeichnen, nicht bei jedem Neuzeichnen
 
   const rows = (list, sub = whenText) => `<div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div>`;
   const head = (name, n, cls = '') => `${name} <span class="count ${cls}">${n}</span>`;
@@ -645,6 +647,7 @@ function kindBar() {
 // Hinweis nach dem Tausch: einmal pro Monat und Gerät, zum Wegtippen
 // Monatsergebnis: einmal pro Monat und Gerät. Erreichtes bleibt im Haushalt mit der damaligen Belohnung.
 function goalNote() {
+  if (!S.daysReady || !S.tasksLoaded) return '';
   const r = goalResult(S.tasks, S.hh, S.today, doneMap());
   if (!r) return '';
   const hits = S.hh.goalHits || {};
@@ -656,6 +659,10 @@ function goalNote() {
   if ((!reached && !r.settled) || ls.get('goal-seen') === r.month) return '';
   const reward = hits[r.month] ?? goalOf(S.hh).reward;
   const text = !reached ? 'Neuer Monat, neues Ziel.' : `Geschafft! ${reward ? esc(reward) : 'Euer gemeinsames Ziel ist erreicht.'}`;
+  if (reached && ls.get('goal-star') !== r.month) {
+    ls.set('goal-star', r.month);
+    celebrate(`Geschafft!${reward ? ` ${reward}` : ''}`, { colors: S.hh.persons.map((p) => p.color) });
+  }
   return `<button class="awaynote swapnote" data-action="goal-seen" style="--pc:var(--accent)">${text}</button>`;
 }
 
@@ -817,7 +824,73 @@ const MILESTONES = {
   cup: 'M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3',
   star: 'M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z',
   cal: 'M3 5h18v16H3zM3 10h18M8 3v4M16 3v4',
+  joker: 'M6 3h12v18H6zM12 8l1.2 2.6 2.8.3-2.1 1.9.6 2.8-2.5-1.4-2.5 1.4.6-2.8-2.1-1.9 2.8-.3z',
 };
+
+// Erfolgssymbol: Stern als Linie, zeichnet sich auf Wunsch
+const starSvg = (stroke, draw = true, path = MILESTONES.star) => `<svg class="star ${draw ? 'draw' : ''}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path pathLength="1" d="${path}"></path></svg>`;
+
+// Kurz einblenden (unter 1,5 s), Antippen schließt
+function celebrate(text, { colors = [person(S.me)?.color], path } = {}) {
+  $('#fx')?.remove();
+  const el = document.createElement('button');
+  el.id = 'fx';
+  const grad = colors.length > 1
+    ? `<svg width="0" height="0" style="position:absolute"><linearGradient id="fxg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--c-${colors[0]})"/><stop offset="1" style="stop-color:var(--c-${colors[1]})"/></linearGradient></svg>` : '';
+  el.innerHTML = `${grad}${starSvg(colors.length > 1 ? 'url(#fxg)' : `var(--c-${colors[0]})`, true, path)}<b>${esc(text)}</b>`;
+  el.onclick = () => el.remove();
+  document.body.append(el);
+  setTimeout(() => el.remove(), 1400);
+}
+
+// Meilensteine: persönlich, einmal erreicht bleibt erreicht (stats_<id> im Haushalt: { longest, done: { id: Tag }, start })
+const statsOf = (id) => ({ longest: 0, done: {}, start: null, ...S.hh[`stats_${id}`] });
+function milestones() {
+  const mine = S.dayComps.filter((c) => c.by === S.me);
+  const tasks = mine.filter((c) => !c.rule), rules = mine.filter((c) => c.rule);
+  const st = statsOf(S.me);
+  const { current, longest } = mySeries();
+  const best = Math.max(st.longest, longest);
+  const byId = doneMap();
+  const months = [];
+  for (let d = toDay(monthBounds(S.hh.setup)[0]); d < toDay(monthBounds(S.today)[0]); d = toDay(monthBounds(fromDay(d))[1]) + 1) months.push(monthBounds(fromDay(d)));
+  const whole = months.slice(-24).filter(([a]) => a >= S.dayFrom || S.hh.setup >= S.dayFrom)
+    .some(([a, b]) => { const l = dueBetween(S.tasks, S.hh, a, b, byId, S.me); return l.length && l.every((w) => w.done); });
+  const joker = jokerOf(S.hh, S.me);
+  const goals = Object.keys(S.hh.goalHits || {}).length;
+  const left = (n, goal) => `noch ${Math.max(0, goal - n)}`;
+  const list = [
+    ['first', 'Erster Haken', tasks.length >= 1, 'läuft', MILESTONES.check],
+    ['week', 'Erste Woche geschafft', best >= 1, 'läuft', MILESTONES.cal],
+    ['week4', '4 Wochen Serie', best >= 4, left(best, 4), MILESTONES.flame],
+    ['month', 'Ganzer Monat', whole, 'läuft', MILESTONES.cal],
+    ['tasks100', '100 Aufgaben', tasks.length >= 100, left(tasks.length, 100), MILESTONES.cup],
+    ['extra100', '100 extra', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
+    ['joker', 'Erster Joker', joker.earned >= 1, `noch ${JOKER_PRICE - joker.progress}`, MILESTONES.joker],
+    ['goal', 'Gemeinsames Ziel', goals >= 1, 'läuft', MILESTONES.star],
+  ].map(([id, name, on, open, path]) => ({ id, name, on: on || !!st.done[id], sub: id === 'goal' && goals ? `${goals}× geschafft` : on || st.done[id] ? 'geschafft' : open, path }));
+  return { list, best, current, tasks };
+}
+
+// Erreichtes festhalten; beim ersten Mal still, danach Puls in der Statuskarte und Stern beim ersten Haken
+function syncStats() {
+  if (!S.daysReady || !S.tasksLoaded) return; // erst urteilen, wenn die Erledigungen da sind
+  const field = `stats_${S.me}`;
+  const first = !S.hh[field];
+  const st = statsOf(S.me);
+  const { list, best, tasks } = milestones();
+  const fresh = list.filter((m) => m.on && !st.done[m.id]);
+  const started = tasks.some((c) => c.day >= S.hh.setup && S.tasks.some((t) => t.id === c.taskId));
+  const startNow = started && st.start !== S.hh.setup;
+  if (!first && !fresh.length && best <= st.longest && !startNow) return;
+  const next = { longest: best, start: started ? S.hh.setup : st.start, done: { ...st.done, ...Object.fromEntries(fresh.map((m) => [m.id, S.today])) } };
+  S.hh = { ...S.hh, [field]: next };
+  updateHH({ [field]: next });
+  if (first) return;
+  // Puls erst nach dem Neuzeichnen, das auf das Speichern folgt
+  if (fresh.length || best > st.longest) setTimeout(() => $('.card')?.classList.add('pulse'), 150);
+  if (startNow) celebrate('Der Anfang ist gemacht!');
+}
 
 function monthBounds(s) {
   const [y, m] = s.split('-').map(Number);
@@ -867,7 +940,8 @@ function viewStats() {
   const max = Math.max(1, ...vals);
   const bars = P.bars.map((b, i) => `<div class="${b.now ? 'now' : ''}"><span>${vals[i] || ''}</span><i class="${vals[i] ? '' : 'zero'}" style="height:${vals[i] ? Math.max(8, Math.round((vals[i] / max) * 76)) : 4}px"></i><em>${b.label}</em></div>`).join('');
 
-  const { current, longest } = myStreaks();
+  syncStats();
+  const { list, best, current } = milestones();
   const byId = doneMap();
   const end = P.to < S.today ? P.to : S.today;
   const due = dueBetween(S.tasks, S.hh, P.from, end, byId, S.me);
@@ -878,22 +952,8 @@ function viewStats() {
     return `<div class="rrow"><div><b>${KIND_LABEL[k]}</b><span>${n} von ${g.length}</span></div><div class="bar thin"><i style="width:${Math.round((n / g.length) * 100)}%"></i></div></div>`;
   }).join('');
 
-  // Meilensteine: erreicht in Personenfarbe, offen grau mit „noch X“
-  const left = (n, goal) => (n >= goal ? 'geschafft' : `noch ${goal - n}`);
-  const sinceStart = toDay(S.today) - toDay(S.hh.setup);
-  const months = [];
-  for (let d = toDay(monthBounds(S.hh.setup)[0]); d < toDay(monthBounds(S.today)[0]); d = toDay(monthBounds(fromDay(d))[1]) + 1) months.push(monthBounds(fromDay(d)));
-  const wholeMonth = months.slice(-24).some(([a, b]) => { const l = dueBetween(S.tasks, S.hh, a, b, byId, S.me); return l.length && l.every((w) => w.done); });
-  const goalHitCount = Object.keys(S.hh.goalHits || {}).length;
-  const badges = [
-    ['Erste Woche', sinceStart >= 7, left(sinceStart, 7), MILESTONES.check],
-    ['7 Tage Serie', longest >= 7, left(longest, 7), MILESTONES.flame],
-    ['100 Aufgaben', tasks.length >= 100, left(tasks.length, 100), MILESTONES.cup],
-    ['30 Tage Serie', longest >= 30, left(longest, 30), MILESTONES.flame],
-    ['100 extra', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
-    ['Ganzer Monat', wholeMonth, wholeMonth ? 'geschafft' : 'läuft', MILESTONES.cal],
-    ['Gemeinsames Ziel', goalHitCount > 0, goalHitCount ? `${goalHitCount}× geschafft` : 'läuft', MILESTONES.star],
-  ].map(([name, on, sub, path]) => `<div class="badge ${on ? 'on' : ''}"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg></i><b>${name}</b><small>${sub}</small></div>`).join('');
+  // Meilensteine: erreicht in Personenfarbe, offen grau
+  const badges = list.map((m) => `<div class="badge ${m.on ? 'on' : ''}"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${m.path}"></path></svg></i><b>${m.name}</b><small>${m.sub}</small></div>`).join('');
 
   const seg = [['week', 'Woche'], ['month', 'Monat'], ['year', 'Jahr']].map(([v, l]) => `<button data-stat-mode="${v}" aria-pressed="${S.statMode === v}">${l}</button>`).join('');
   return `<div class="seg">${seg}</div>
@@ -902,7 +962,7 @@ function viewStats() {
       <div class="bars">${bars}</div>
       <span class="card-open">${trend}</span>
     </section>
-    <div class="tiles2"><div class="stat"><span>Aktuelle Serie</span><b class="a">${daysText(current)}</b></div><div class="stat"><span>Längste Serie</span><b>${daysText(longest)}</b></div></div>
+    <div class="tiles2"><div class="stat"><span>Aktuelle Serie</span><b class="a">${weeksText(current)}</b></div><div class="stat"><span>Längste Serie</span><b>${weeksText(best)}</b></div></div>
     ${rhythm ? `<h2>Nach Rhythmus</h2><div class="tile pad">${rhythm}</div>` : ''}
     <h2>Meilensteine</h2><div class="badges">${badges}</div>`;
 }
@@ -1416,6 +1476,7 @@ function toggleRule(input) {
     });
     haptic();
     const earned = countRule(1);
+    if (earned) { celebrate('Joker verdient!', { path: MILESTONES.joker }); setTimeout(haptic, 200); }
     snack(earned ? 'Joker verdient!' : 'Erledigt.', () => { S.store.removeCompletion(S.code, id); countRule(-1); });
   } else if (!reopen(id, title)) input.checked = true;
 }

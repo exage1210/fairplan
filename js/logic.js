@@ -705,16 +705,24 @@ export function goalResult(tasks, ctx, todayStr, doneById) {
   return { month, ...s, reached: s.done * 100 >= goalOf(ctx).percent * s.total, settled: todayStr > s.lastEnd };
 }
 
-// Serie: Tage in Folge mit mindestens einer eigenen Erledigung. Heute darf noch fehlen,
-// Abwesenheit unterbricht nicht. days: Liste von 'YYYY-MM-DD'.
-export function streaks(days, todayStr, isAway = () => false) {
-  const set = new Set(days);
-  if (!set.size) return { current: 0, longest: 0 };
-  const today = toDay(todayStr);
-  let run = 0, longest = 0;
-  for (let d = Math.min(...[...set].map(toDay)); d <= today; d++) {
-    if (set.has(fromDay(d))) { run++; if (run > longest) longest = run; }
-    else if (d !== today && !isAway(fromDay(d))) run = 0;
+// Serie in Wochen: eigene Woche ab dem Putztag, zählt, wenn alle eigenen Termine darin erledigt sind.
+// Ohne Termine (auch Abwesenheit und Joker) unterbricht sie nicht und zählt nicht; solange eine Frist läuft ebenso.
+// fromStr: ab hier sind Erledigungen geladen, vorher wird nicht geurteilt. Liefert { current, longest }.
+export function weekStreaks(tasks, ctx, me, doneById, fromStr, todayStr) {
+  const days = ctx.persons.find((p) => p.id === me)?.days;
+  const partial = fromStr > ctx.setup;
+  const startDay = partial ? fromStr : ctx.setup;
+  let a = toDay(personalWeek(days, startDay)[0]);
+  if (partial && fromDay(a) < fromStr) a += 7;
+  let current = 0, longest = 0;
+  for (const today = toDay(todayStr); a <= today; a += 7) {
+    const list = dueBetween(tasks, ctx, fromDay(a), fromDay(a + 6), doneById, me).filter((w) => kindOf(w.task) !== 'daily');
+    if (!list.length) continue;
+    const open = list.filter((w) => !w.done);
+    if (!open.length) {
+      current++;
+      if (current > longest) longest = current;
+    } else if (open.every((w) => w.end < todayStr)) current = 0;
   }
-  return { current: run, longest };
+  return { current, longest };
 }
