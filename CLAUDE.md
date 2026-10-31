@@ -84,7 +84,14 @@ Gilt vor älteren Einträgen oben („Kein Pakettausch“ ist überholt, wo die 
 - `loadByPerson` bleibt pro Paket gerechnet: bei Tausch stimmt die Zeit nur im Schnitt. `autoSplit` läuft nur beim Einrichten, „Fix“ gleicht sich nicht von selbst aus.
 - Hinweise: Statuskarte 3 Tage vorher „Tausch am …“; „Getauscht! Was schon läuft, machst du noch fertig. Danach hast du: …“ einmal pro Monat und Gerät (`fairplan.swap-seen`), nennt das Wöchentliche und „N weitere“, ohne Halbjährliches/Jährliches.
 - Schalter (v34) auch in der Aufteilung (`st.rotate`): an, außer `rotateFrom === null` (bewusst aus); fehlt der Wert (alter Haushalt), gilt beim Neu-Einrichten „an“. Datum in Hinweisen ans Satzende, `fmtDate` endet je nach Jahr mit oder ohne Punkt.
-- Geplant, nicht gebaut: persönliche Woche ab dem Putztag für wöchentlich und alle 2 Wochen, ohne Spielraum; Balken und „Ganzer Monat“ ebenso, Statistik und Plan bleiben beim Kalender (Vault-Log 31.10.).
+
+## Persönliche Woche (31.10.2026, v35)
+Gilt vor älteren Einträgen oben, wo sie sich widersprechen (Spielraum, Tauschtag bei Wöchentlichem, Balken Mo–So).
+- Wöchentlich und alle 2 Wochen (`isRolling`) laufen vom Termin bis zum Tag vor dem nächsten Termin, ohne Spielraum (`rollingTerms`, `evaluateRolling`). Rot erst am nächsten Termin; ein Haken zählt für den laufenden Termin, wie bisher. Vorziehen ab Beginn der Kalenderperiode, sobald der laufende erledigt ist; heute Erledigtes bleibt heute „erledigt“.
+- Tausch: Wöchentliches gehört der Person, deren Putztag im passenden Monat liegt (Abstand bei Mo/So: 6 und 8 Tage). Eine Kalenderwoche kann so zwei Termine haben (zweiter Schlüssel `weekly:<Montag>b`) oder keinen. Alle 2 Wochen behält einen Termin je Block mit Zuständigkeit am Blockbeginn (Abstand 20 und 8 Tage), weil die Monatsregel 6 und 22 ergäbe. Monatliches und Seltenes unverändert mit Spielraum.
+- Schlüssel bleiben sonst `weekly:<Montag>`/`biweekly:<Blockbeginn>`: bisherige Erledigungen gelten weiter, nichts wird umgeschrieben.
+- Statuskarte: Balken und „Deine Woche“ über `personalWeek` (ab dem ersten Putztag der Person). „heute x/y“, „Noch N offen“ und Zahl am Icon zählen nur `isPressing` (Termin und Tag danach, dazu Rotes); der Rest steht in der Liste und als „Noch N bis zum nächsten Termin“. Plan-Kalender und Statistik bleiben beim Kalender. „Ganzer Monat“ zählt über `dueBetween` die Termine im Monat, ohne eigene Änderung.
+- Abwesenheit: `myPaused` blendet Wöchentliches nur aus, wenn man heute weg ist oder der Termintag in die Abwesenheit fällt; verpasst wird nachgesehen, wenn die Abwesenheit die Zeit bis zum nächsten Termin berührt.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
