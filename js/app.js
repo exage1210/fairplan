@@ -34,7 +34,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.41';
+const APP_VERSION = '2.0.42';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -600,6 +600,7 @@ function viewToday() {
       ${weekAll || bonus || jokerLabel ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus || jokerLabel ? `<span class="pill">${[bonus ? `+${bonus} extra` : '', jokerLabel].filter(Boolean).join(' · ')}</span>` : ''}</div>
         ${weekAll ? `<div class="bar"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div>` : ''}</div>` : ''}
       <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : pressing.length ? `Noch ${pressing.length} offen` : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.'}</span>
+      ${S.today < S.hh.setup ? `<span class="card-next">Euer Plan startet am ${fmtDate(S.hh.setup, true)}</span>` : ''}
       ${goalNow.total ? `<span class="card-next">Gemeinsam: ${goalNow.percent} % von ${goal.percent} %${goal.reward ? ` · ${esc(goal.reward)}` : ''}</span>` : ''}
       ${next ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
       ${swap && toDay(swap) - toDay(S.today) <= 3 ? `<span class="card-next">Tausch am ${fmtDate(swap)}</span>` : ''}
@@ -1295,12 +1296,12 @@ function renderSetup() {
   } else if (st.step === 'goal') {
     body = `<h2>Euer gemeinsames Ziel</h2>
       ${goalBlock(st.goal)}
-      <p class="small">Später änderbar unter Mehr › Haushalt.</p>${err}
+      <p class="small">Später änderbar unter Mehr › Haushalt.</p>${startLine(st)}${err}
       <div class="btnrow"><button class="btn" data-setup="back-split">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
   } else if (st.step === 'rules') {
     body = `<h2>Abmachungen</h2>
       <p class="small">Selbstverständliches für jeden Tag – für alle abhakbar, nie „offen“. Später in den Optionen änderbar.</p>
-      ${ruleChips(st.rules, 'data-setup-rule')}${err}
+      ${ruleChips(st.rules, 'data-setup-rule')}${pickedTasks().length ? '' : startLine(st)}${err}
       <div class="btnrow"><button class="btn" data-setup="areas">Zurück</button>${pickedTasks().length
         ? '<button class="btn primary" data-setup="to-split">Weiter</button>'
         : `<button class="btn primary" data-setup="create-empty">${finish}</button>`}</div>`;
@@ -1321,6 +1322,12 @@ function renderSetup() {
   app.innerHTML = `<header class="top">${LOGO}</header>${body}`;
   fillQr();
 }
+
+// Start des Plans: kleine Zeile am Ende der Einrichtung, antippen = Datum wählen. Standard heute, nicht in der Vergangenheit.
+const startText = (st) => `Start: ${st.start === S.today ? 'heute' : fmtDate(st.start, true)}${st.rotate ? ` · erster Tausch am ${fmtDate(nextSwap({ rotateFrom: rotationBase(st.start) }, st.start), st.start.slice(0, 4) !== nextSwap({ rotateFrom: rotationBase(st.start) }, st.start).slice(0, 4))}` : ''}`;
+const startLine = (st) => `<div class="startline"><span id="startText">${startText(st)}</span>${st.startOpen
+  ? `<label class="field">Ab diesem Tag zählen die Termine<input type="date" data-setup-start min="${S.today}" value="${st.start}"></label>`
+  : '<button class="linkbtn" data-setup-startedit>ändern</button>'}</div>`;
 
 // Termine erst beim Anlegen verteilen (nach dem Umverteilen auf A/B)
 function setupTasks(withTemplate) {
@@ -1701,6 +1708,7 @@ app.addEventListener('click', (e) => {
     const persons = S.hh.persons.map((p, i) => (i === +d.personColor ? { ...p, color: d.color } : p));
     return updateHH({ persons });
   }
+  if (d.setupStartedit !== undefined) { S.setup.startOpen = true; renderSetup(); $('[data-setup-start]')?.focus(); return; }
   if (d.goalPercent) return setGoal({ percent: +d.goalPercent });
   if (d.goalReward) {
     const cur = S.setup ? S.setup.goal.reward : goalOf(S.hh).reward;
@@ -1885,6 +1893,13 @@ app.addEventListener('change', (e) => {
   if (d.action === 'toggle') return toggle(el);
   if (d.action === 'toggle-rule') return toggleRule(el);
   if (d.action === 'toggle-step') return toggleStep(el);
+  // Nicht neu zeichnen: Am iPhone schlösse sich sonst die Datumsauswahl beim Drehen
+  if (d.setupStart !== undefined) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(el.value) || el.value < S.today) el.value = S.today;
+    S.setup.start = el.value;
+    $('#startText').textContent = startText(S.setup);
+    return;
+  }
   if (d.goalText !== undefined && !S.setup) return setGoal({ reward: el.value.trim() });
   if (d.switch === 'setup-rotate') { S.setup.rotate = el.checked; return renderSetup(); }
   if (d.switch === 'rotate') return updateHH({ rotateFrom: el.checked ? rotationBase(S.today) : null });
@@ -1909,7 +1924,11 @@ app.addEventListener('change', (e) => {
   if (d.start !== undefined) {
     const ok = /^\d{4}-\d{2}-\d{2}$/.test(el.value) && el.value !== S.hh.setup
       && confirm('Start ändern? Der 2-Wochen-Rhythmus verschiebt sich mit. Schon Abgehaktes im laufenden 2-Wochen-Block kann dadurch wieder offen erscheinen.');
-    if (ok) { updateHH({ setup: el.value }); snack('Start geändert.'); }
+    // Noch nicht getauscht: Der erste Tausch rückt mit, frühestens 2 Wochen nach dem Start
+    if (ok) {
+      updateHH({ setup: el.value, ...(S.hh.rotateFrom && !swapCount(S.hh, S.today) ? { rotateFrom: rotationBase(el.value) } : {}) });
+      snack('Start geändert.');
+    }
     else el.value = S.hh.setup;
     return render();
   }
