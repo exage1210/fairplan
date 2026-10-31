@@ -3,6 +3,7 @@
 Putzplan-PWA für einen Haushalt mit 2 Personen. Version 1 ist fertig und in Benutzung (seit 28.10.2026).
 
 ## Zusammenarbeit
+- Bei jedem Start zuerst kurz: aktueller Stand und nächste Schritte (aus der Vault-Notiz `Projekte/Fairplan/Übersicht.md`, online laufende Version prüfen).
 - Antworten kurz, direkt, auf Deutsch, per du. Daniel ist Anfänger bis fortgeschritten (österreichisches Deutsch: Gewand, Vorzimmer, Backrohr).
 - Nur in diesem Ordner arbeiten. Keine Extras ohne Wunsch, keine globalen Installationen ohne Rückfrage.
 - Bei Anleitungen: kleine Etappen, genaue Klickwege, auf Screenshot warten.
@@ -16,7 +17,7 @@ Putzplan-PWA für einen Haushalt mit 2 Personen. Version 1 ist fertig und in Ben
 - `js/logic.js`: Fälligkeit und Rotation (reine Funktionen), Tests in `tests/logic.test.js` (`node --test`).
 - `js/store.js`: Firestore bzw. lokaler Testmodus (wenn `config.js` leer).
 - `js/app.js`: Oberfläche (Einrichtung, Heute, Alle, Kalender, Verlauf, Optionen, Editor).
-- `js/template.js`: Vorlage „Vorschlag für 2 Personen“ (mit Minuten-Schätzungen) und vorgeschlagene Abmachungen. Wirkt nur bei neu angelegten Haushalten, bestehende Haushalte ändern sich dadurch nicht.
+- `js/template.js`: Vorlage (`TEMPLATE` mit Bereich, Rhythmus, Dauer, Saison, Hinweis; `when` = nur wenn es das im Haushalt gibt), Kern (`CORE_*`), unser Plan (`OUR_*`) und Abmachungen. Wirkt nur beim Einrichten, bestehende Haushalte ändern sich dadurch nicht.
 - `sw.js`: Offline-Cache; bei Änderung der Dateiliste `SHELL` anpassen.
 
 ## Getroffene Entscheidungen
@@ -66,6 +67,14 @@ Etappen 1–6 gesammelt gebaut; Etappe 7 (Einrichtung neu) kommt extra. Gilt vor
 - Erledigt-Zeile (v29): „erledigt von dir/Name · Uhrzeit“ (`byWho`, `timeOf`, `forWhom`), in der Aufgabenliste mit Datum.
 - v30: Während der eigenen Abwesenheit sind alle eigenen offenen Aufgaben, sonst die mit Termin in der geplanten Abwesenheit, auf „Aktuell“ und bei der Zahl am Icon ausgeblendet (`myPaused`), andere sehen sie weiter und können vertreten; in der Aufgabenliste bleiben sie sichtbar. Meilenstein „Ganzer Monat“: „läuft“ oder „geschafft“.
 - Spruch: in der App „Fairplan – der Putzplan für deinen Haushalt“, für die Werbung „Fairplan – weniger diskutieren, mehr erledigt“.
+
+## Neue Vorlage (31.10.2026, v31, Runde 1; Vault-Notizen „Vorlage“ und „Unser Plan“)
+Gilt vor älteren Einträgen oben, wo sie sich widersprechen.
+- Einrichtung, Schritt Vorlage: „Daniel und Sabrina“ (`OUR_TASKS`, nur solange wir testen, vor Verkauf entfernen) und „Vorschlag“ (vorerst nur Kern, Fragen und Bereiche-Auswahl kommen in Runde 2) führen zur Aufteilung; „Leer starten“ wie bisher. `area` bleibt an der Aufgabe, `when` wird beim Anlegen entfernt.
+- Aufteilung nach Zeit (`autoSplit`): von häufig nach selten wird jedes Intervall so geteilt, dass der bisherige Unterschied möglichst klein wird; bei gleichem Ergebnis gewinnt die gleichmäßigere Anzahl. Die Anzahl pro Person kann deshalb deutlich abweichen. Halbjährliches, Jährliches und Bei Bedarf sind gemeinsam, „Gewand ausmisten“ pro Person.
+- Saison optional mit zweitem Zeitraum (`from2`, `to2`), im Editor unter „Mehr“; Fenster putzen und Gewand tauschen März–Mai und Sep–Nov. `timesPerMonth` zählt bei Monatsintervallen die Perioden mit Saisonmonat (jährlich mit Saison bleibt 1× pro Jahr).
+- Abmachungen: Umbenannte Vorschläge in `RULE_RENAMED`; bestehende Haushalte behalten den alten Text, bei „Plan neu einrichten“ wird er ersetzt.
+- „+N extra“ statt „Bonus“ überall in der Oberfläche; Erklärzeilen unter Abmachungen und Bei Bedarf.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
