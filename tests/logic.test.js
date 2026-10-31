@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TEMPLATE, TEMPLATE_RULES, CORE_TASKS, CORE_RULES, OUR_TASKS, OUR_RULES, AREAS } from '../js/template.js';
+import { TEMPLATE, TEMPLATE_RULES, suggestTasks, suggestRules, OUR_TASKS, OUR_RULES, AREAS, QUESTIONS } from '../js/template.js';
 import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
   packageOwners, inSeason, windowsBetween, awayDuring,
@@ -333,7 +333,6 @@ test('Vorlage: vollständig, Kern und unser Plan passen', () => {
   const ctx2 = ctx();
   const hoursPerWeek = (list) => Object.values(loadByPerson(list, ctx2)).reduce((a, b) => a + b, 0) / 4.3 / 60;
   assert.ok(Math.abs(hoursPerWeek(OUR_TASKS) - 4.4) < 0.1, `${hoursPerWeek(OUR_TASKS)}`);
-  assert.ok(CORE_TASKS.every((t) => !t.when));
   const titles = OUR_TASKS.map((t) => t.title);
   assert.ok(!titles.some((x) => x.startsWith('Garten') || x.startsWith('Haustier') || x.includes('Balkon')));
   assert.ok(titles.includes('Loggia kehren') && titles.includes('Wäsche inkl. Bügeln') && titles.includes('Kind: Kindersitz waschen'));
@@ -341,5 +340,22 @@ test('Vorlage: vollständig, Kern und unser Plan passen', () => {
   assert.deepEqual([bett.n, bett.unit], [1, 'month']);
   assert.ok(!OUR_RULES.includes('Haustier: Näpfe reinigen') && OUR_RULES.includes('Pflanzen gießen bei Hitze'));
   assert.equal(TEMPLATE_RULES.length, 10);
-  assert.equal(CORE_RULES.length, 7);
+});
+
+test('Vorschlag: ohne Antworten nur der Kern, Antworten wählen Passendes vor', () => {
+  const on = (answers) => suggestTasks(answers).filter((t) => t.on);
+  assert.ok(on([]).every((t) => !t.when));
+  assert.equal(on([]).length, 35);
+  assert.equal(suggestTasks([]).length, TEMPLATE.length);
+  assert.equal(suggestRules([]).length, 7);
+  assert.ok(on(['kind']).some((t) => t.title === 'Kind: Kindersitz waschen'));
+  assert.ok(suggestRules(['kind']).includes('Kind: Hochstuhl und Wickeltisch abwischen'));
+  const pets = on(['haustier']).filter((t) => t.area === 'tier').map((t) => t.title);
+  assert.deepEqual(pets, ['Haustier: Schlafplatz waschen']); // Katzenklo, Käfig nur angeboten
+  const washing = on(['buegeln']).find((t) => t.title.startsWith('Wäsche'));
+  assert.deepEqual([washing.title, washing.min], ['Wäsche inkl. Bügeln', 90]);
+  assert.equal(on(['buegeln']).length, 35); // Bügeln ist keine eigene Aufgabe
+  assert.equal(TEMPLATE.find((t) => t.title === 'Wäsche').min, 60); // Vorlage bleibt unverändert
+  const all = QUESTIONS.map((q) => q[0]);
+  assert.equal(on(all).length, TEMPLATE.filter((t) => !t.soft).length);
 });
