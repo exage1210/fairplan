@@ -23,9 +23,11 @@ export const AREAS = [
 
 // min: geschätzte Minuten pro Durchgang; note: graue Zeile; perMonth: bei Bedarf geschätzt, wie oft im Monat;
 // when: nur wenn es das im Haushalt gibt (ohne when = Kern).
+// soft: wird angeboten, aber auch bei passender Antwort nicht vorausgewählt (passt nicht zu jedem Haushalt).
 // Zuteilung: Halbjährliches, Jährliches und Bei Bedarf gemeinsam, der Rest geht über autoSplit an die Personen.
+export const defaultAssign = (iv) => (iv.n >= 6 || iv.unit === 'need' ? 'shared' : 'A');
 const t = (title, iv, area, min, extra = {}) => ({
-  title, ...iv, area, min, assign: iv.n >= 6 || iv.unit === 'need' ? 'shared' : 'A', note: '', season: null, ...extra,
+  title, ...iv, area, min, assign: defaultAssign(iv), note: '', season: null, ...extra,
 });
 const season = (from, to) => ({ season: { from, to } });
 const FRUEHLING_HERBST = { season: { from: 3, to: 5, from2: 9, to2: 11 } };
@@ -51,8 +53,8 @@ export const TEMPLATE = [
   t('Garten: Unkraut jäten', M, 'aussen', 30, { when: 'garten', ...season(4, 9) }),
   t('Kind: Spielzeug reinigen', M, 'kind', 20, { when: 'kind' }),
   t('Haustier: Schlafplatz waschen', M, 'tier', 10, { when: 'haustier' }),
-  t('Haustier: Katzenklo komplett', M, 'tier', 15, { when: 'haustier' }),
-  t('Haustier: Käfig/Aquarium', M, 'tier', 30, { when: 'haustier' }),
+  t('Haustier: Katzenklo komplett', M, 'tier', 15, { when: 'haustier', soft: true }),
+  t('Haustier: Käfig/Aquarium', M, 'tier', 30, { when: 'haustier', soft: true }),
   t('Auto waschen', M, 'auto', 30, { when: 'auto' }),
 
   // Vierteljährlich
@@ -125,14 +127,25 @@ export const RULE_WHEN = {
   'Haustier: Näpfe reinigen': 'haustier',
 };
 
-// Vorschlag ohne Zusatzantworten: nur der Kern
-export const CORE_TASKS = TEMPLATE.filter((x) => !x.when);
-export const CORE_RULES = TEMPLATE_RULES.filter((r) => !RULE_WHEN[r]);
+// Fragen „Was gibt es bei euch?“; Bügeln verlängert nur die Wäsche, weil es keine Folgeaufgaben gibt
+export const QUESTIONS = [
+  ['kind', 'Kind'], ['haustier', 'Haustier'], ['pflanzen', 'Pflanzen'], ['balkon', 'Balkon'], ['garten', 'Garten'],
+  ['auto', 'Auto'], ['geschirrspueler', 'Geschirrspüler'], ['duschvorhang', 'Duschvorhang'], ['buegeln', 'Bügeln'],
+];
+const IRONING = { title: 'Wäsche inkl. Bügeln', min: 90 };
+
+// Vorschlag: alle Aufgaben, on = vorausgewählt. Ohne Antworten nur der Kern.
+export const suggestTasks = (answers) => TEMPLATE.map((x) => ({
+  ...x,
+  ...(x.title === 'Wäsche' && answers.includes('buegeln') ? IRONING : {}),
+  on: !x.when || (answers.includes(x.when) && !x.soft),
+}));
+export const suggestRules = (answers) => TEMPLATE_RULES.filter((r) => !RULE_WHEN[r] || answers.includes(RULE_WHEN[r]));
 
 // Daniel und Sabrina: Vorlage mit unseren Abweichungen (nur solange wir testen, vor Verkauf entfernen)
 const OUR_HOME = ['kind', 'auto', 'geschirrspueler', 'duschvorhang', 'balkon', 'pflanzen'];
 const OUR_CHANGES = {
-  'Wäsche': { title: 'Wäsche inkl. Bügeln', min: 90 },
+  'Wäsche': IRONING,
   'Bett neu beziehen': M,
 };
 export const OUR_TASKS = TEMPLATE.filter((x) => !x.when || OUR_HOME.includes(x.when))

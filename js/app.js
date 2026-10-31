@@ -4,7 +4,7 @@ import {
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
-import { CORE_TASKS, CORE_RULES, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED } from './template.js';
+import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED } from './template.js';
 
 // ---------- Konstanten & Hilfen ----------
 
@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.31';
+const APP_VERSION = '2.0.32';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -993,21 +993,60 @@ function renderWhoAmI() {
 
 // ---------- Einrichtung ----------
 
+// mode: our | suggest | empty; pick: Aufgaben der Bereiche-Auswahl (on = übernommen)
+const PICK_START = { mode: null, answers: [], pick: [], pickKey: null, openAreas: [], ownArea: null };
+
 // reset: „Plan neu einrichten“ im bestehenden Haushalt (Code, Verbindung und Verlauf bleiben)
 function startSetup(reset = false) {
   S.setup = reset
     ? { step: 'persons', reset: true, persons: S.hh.persons.map((p) => ({ name: p.name, color: p.color, days: p.days?.length ? p.days : [5] })),
       shared: S.hh.sharedDays?.length ? S.hh.sharedDays : [5], start: S.today,
-      rules: (S.hh.rules || []).map((r) => RULE_RENAMED[r] || r).filter((r) => RULE_SUGGESTIONS.includes(r)), tasks: [], planRules: [], error: '' }
+      rules: (S.hh.rules || []).map((r) => RULE_RENAMED[r] || r).filter((r) => RULE_SUGGESTIONS.includes(r)), tasks: [], planRules: [], ...PICK_START, error: '' }
     : { step: 'start', persons: [{ name: '', color: 'violett', days: [5] }, { name: '', color: 'gruen', days: [5] }],
-      shared: [5], start: S.today, rules: [], tasks: [], planRules: [], error: '' };
+      shared: [5], start: S.today, rules: [], tasks: [], planRules: [], ...PICK_START, error: '' };
   renderSetup();
 }
 
 const hours = (min) => (min / 60).toLocaleString('de-AT', { maximumFractionDigits: 1 });
 const setupCtx = () => ({ ...DEFAULT_HOUSEHOLD, setup: S.setup.start, persons: [{ id: 'p1' }, { id: 'p2' }] });
 // Stunden pro Woche für beide zusammen
-const weekHours = (tasks) => hours(Object.values(loadByPerson(tasks, setupCtx())).reduce((a, b) => a + b, 0) / 4.3);
+const weekMinutes = (tasks) => Object.values(loadByPerson(tasks, setupCtx())).reduce((a, b) => a + b, 0) / 4.3;
+
+// Bereiche-Auswahl
+const pickedTasks = () => S.setup.pick.filter((t) => t.on);
+const pickTotal = () => {
+  const min = weekMinutes(pickedTasks());
+  return `Pro Woche ${hours(min)} h · pro Person ${hours(min / 2)} h`;
+};
+const kindOptions = (cur) => KINDS.filter((k) => k !== 'custom').map((k) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${KIND_LABEL[k]}</option>`).join('');
+const pickRow = (t) => {
+  const i = S.setup.pick.indexOf(t);
+  const meta = [t.note, t.season && seasonLabel(t.season)].filter(Boolean).join(' · ');
+  return `<div class="pick ${t.on ? 'on' : ''}">
+    <label class="pick-main"><span class="check"><input type="checkbox" data-pick="${i}" ${t.on ? 'checked' : ''}><span class="box"></span></span>
+      <span class="body"><span class="title">${esc(t.title)}</span>${meta ? `<span class="meta">${esc(meta)}</span>` : ''}</span></label>
+    <div class="inline pick-ctrl"><select data-pick-kind="${i}" aria-label="Rhythmus">${kindOptions(kindOf(t))}</select>
+      <input type="number" data-pick-min="${i}" min="0" max="999" inputmode="numeric" value="${t.min ?? ''}" aria-label="Dauer in Minuten"><span>Min</span></div>
+  </div>`;
+};
+const ownBlock = (key) => (S.setup.ownArea === key
+  ? `<form id="ownForm" class="pick-own" data-area="${key}">
+      <input type="text" name="title" maxlength="120" placeholder="Name der Aufgabe" aria-label="Name der Aufgabe" autocomplete="off">
+      <div class="inline pick-ctrl"><select name="kind" aria-label="Rhythmus">${kindOptions('weekly')}</select>
+        <input type="number" name="min" min="0" max="999" inputmode="numeric" value="15" aria-label="Dauer in Minuten"><span>Min</span></div>
+      <p class="ov" data-own-error></p>
+      <div class="btnrow"><button type="button" class="btn" data-setup-own="">Abbrechen</button><button class="btn primary">Hinzufügen</button></div>
+    </form>`
+  : `<button class="addrow" data-setup-own="${key}">${icon('plus', 18)}Eigene Aufgabe</button>`);
+const areaTiles = () => AREAS.map(([key, name]) => {
+  const st = S.setup;
+  const list = st.pick.filter((t) => t.area === key);
+  const open = st.openAreas.includes(key);
+  return `<section class="tile area ${open ? 'open' : ''}">
+    <button class="mrow" data-setup-area="${key}" aria-expanded="${open}"><span class="l">${name}</span><span class="v">${list.filter((t) => t.on).length} von ${list.length}</span><span class="chev">${icon('chevron', 16)}</span></button>
+    ${open ? `<div class="area-body">${list.map(pickRow).join('')}${ownBlock(key)}</div>` : ''}
+  </section>`;
+}).join('');
 
 
 // Wochentage zum An-/Abwählen (Putztage)
@@ -1029,7 +1068,7 @@ function renderSetup() {
       <label class="field">Haushalts-Code<input type="text" id="joinCode" class="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX"></label>
       <div class="btnrow"><button class="btn block" data-setup="join">Beitreten</button></div>${err}${local}`;
   } else if (st.step === 'persons') {
-    body = `<h2>${st.reset ? 'Plan neu einrichten · ' : ''}Schritt 1 von 3 · Personen</h2>
+    body = `<h2>${st.reset ? 'Plan neu einrichten · ' : ''}Personen</h2>
       ${st.persons.map((p, i) => `<section class="tile setup-person">
         <div class="setup-head">${avatar({ ...p, name: p.name || `${i + 1}` }, 'l')}<strong>Person ${i + 1}</strong></div>
         <h2><label for="sname${i}">Name</label></h2>
@@ -1042,33 +1081,46 @@ function renderSetup() {
       ${err}
       <div class="btnrow"><button class="btn" data-setup="${st.reset ? 'cancel' : 'start'}">${st.reset ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
   } else if (st.step === 'template') {
-    body = `<h2>Schritt 2 von 3 · Vorlage</h2>
+    body = `<h2>Vorlage</h2>
       <button class="choice" data-setup="plan-our"><strong>Daniel und Sabrina</strong>
-        <span>Unser Plan: ${OUR_TASKS.length} Aufgaben, ca. ${weekHours(OUR_TASKS)} h pro Woche, dazu ${OUR_RULES.length} Abmachungen</span></button>
-      <button class="choice" data-setup="plan-core"><strong>Vorschlag 2-Personen-Haushalt</strong>
-        <span>${CORE_TASKS.length} Aufgaben, ca. ${weekHours(CORE_TASKS)} h pro Woche, fair aufgeteilt und auf eure Putztage verteilt, dazu ${CORE_RULES.length} Abmachungen</span></button>
-      <button class="choice" data-setup="rules"><strong>Leer starten</strong>
-        <span>Aufgaben selbst anlegen, Abmachungen auswählen</span></button>${err}
+        <span>Unser Plan: ${OUR_TASKS.length} Aufgaben, ca. ${hours(weekMinutes(OUR_TASKS))} h pro Woche, dazu ${OUR_RULES.length} Abmachungen</span></button>
+      <button class="choice" data-setup="plan-suggest"><strong>Vorschlag 2-Personen-Haushalt</strong>
+        <span>Ein paar Fragen, dann die passenden Aufgaben vorausgewählt und fair aufgeteilt</span></button>
+      <button class="choice" data-setup="plan-empty"><strong>Leer starten</strong>
+        <span>Aufgaben nach Bereichen selbst auswählen</span></button>${err}
       ${st.reset ? '<p class="small">Die bisherigen Aufgaben werden ersetzt. Code, Verbindung und Verlauf bleiben.</p>' : ''}
       <div class="btnrow"><button class="btn" data-setup="persons">Zurück</button></div>`;
+  } else if (st.step === 'questions') {
+    body = `<h2>Was gibt es bei euch?</h2>
+      <p class="small">Passende Aufgaben wählen wir vor. Danach kannst du alles ändern.</p>
+      <div class="filters">${QUESTIONS.map(([id, label]) => `<button data-setup-q="${id}" aria-pressed="${st.answers.includes(id)}">${label}</button>`).join('')}</div>
+      <div class="btnrow"><button class="btn" data-setup="template">Zurück</button><button class="btn primary" data-setup="areas-suggest">Weiter</button></div>`;
+  } else if (st.step === 'areas') {
+    body = `<h2>Aufgaben</h2>
+      <p class="small">Bereich antippen, Aufgabe antippen = übernehmen. Rhythmus und Dauer kannst du gleich hier ändern.</p>
+      ${areaTiles()}${err}
+      <div class="btnrow"><button class="btn" data-setup="${st.mode === 'suggest' ? 'plan-suggest' : 'template'}">Zurück</button><button class="btn primary" data-setup="areas-next">Weiter</button></div>
+      <div class="setup-total" id="pickTotal">${pickTotal()}</div>`;
   } else if (st.step === 'split') {
     const load = loadByPerson(st.tasks, setupCtx());
     const names = st.persons.map((p) => esc(p.name.trim()));
     const list = (pkg) => st.tasks.map((t, i) => [t, i]).filter(([t]) => t.assign === pkg).map(([t, i]) => `
       <button class="rowbtn" data-split="${i}"><span>${esc(t.title)}<br><span class="meta">${t.min} Min · ${intervalLabel(t)} · ${hours(monthlyMinutes(t))} h/Monat</span></span><span class="meta">tauschen</span></button>`).join('');
-    body = `<h2>Schritt 3 von 3 · Aufteilung</h2>
+    body = `<h2>Aufteilung</h2>
       <div class="banner now">${names[0]} <strong>${hours(load.p1)} h</strong> · ${names[1]} <strong>${hours(load.p2)} h</strong> pro Monat</div>
       <p class="small">Automatisch fair verteilt: insgesamt möglichst gleich viel Zeit (Dauer × Häufigkeit), das Häufige zuerst. Antippen gibt eine Aufgabe der anderen Person – die Bilanz rechnet mit. Gemeinsames zählt je zur Hälfte. Zeiten kannst du später bei jeder Aufgabe ändern.</p>
       <h2><i class="sw" style="--pc:var(--c-${st.persons[0].color})"></i>${names[0]}</h2><div class="rows">${list('A')}</div>
       <h2><i class="sw" style="--pc:var(--c-${st.persons[1].color})"></i>${names[1]}</h2><div class="rows">${list('B')}</div>
-      <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und ${st.planRules.length} Abmachungen.</p>
+      <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und ${setupRules(true).length} Abmachungen.</p>
       ${err}
-      <div class="btnrow"><button class="btn" data-setup="template">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
+      <div class="btnrow"><button class="btn" data-setup="${{ our: 'template', suggest: 'areas', empty: 'rules' }[st.mode]}">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
   } else if (st.step === 'rules') {
-    body = `<h2>Schritt 3 von 3 · Abmachungen</h2>
+    body = `<h2>Abmachungen</h2>
       <p class="small">Selbstverständliches für jeden Tag – für beide abhakbar, nie „offen“. Später in den Optionen änderbar.</p>
       ${ruleChips(st.rules, 'data-setup-rule')}${err}
-      <div class="btnrow"><button class="btn" data-setup="template">Zurück</button><button class="btn primary" data-setup="create-empty">${finish}</button></div>`;
+      <div class="btnrow"><button class="btn" data-setup="areas">Zurück</button>${pickedTasks().length
+        ? '<button class="btn primary" data-setup="to-split">Weiter</button>'
+        : `<button class="btn primary" data-setup="create-empty">${finish}</button>`}</div>`;
   } else if (st.step === 'busy') {
     body = '<p class="loading">Einen Moment …</p>';
   } else if (st.step === 'created') {
@@ -1431,6 +1483,13 @@ app.addEventListener('click', (e) => {
   }
   if (d.setupColor) { S.setup.persons[+d.setupColor].color = d.color; return renderSetup(); }
   if (d.setupRule) { S.setup.rules = toggled(S.setup.rules, d.setupRule); return renderSetup(); }
+  if (d.setupQ) { S.setup.answers = toggled(S.setup.answers, d.setupQ); return renderSetup(); }
+  if (d.setupArea) { S.setup.openAreas = toggled(S.setup.openAreas, d.setupArea); return renderSetup(); }
+  if (d.setupOwn !== undefined) {
+    S.setup.ownArea = d.setupOwn || null;
+    renderSetup();
+    return $('#ownForm input[name="title"]')?.focus();
+  }
   if (d.setupDay) { const p = S.setup.persons[+d.setupDay]; p.days = toggledDay(p.days, +d.wd); return renderSetup(); }
   if (el.matches('[data-setup-shared]')) { S.setup.shared = toggledDay(S.setup.shared, +d.wd); return renderSetup(); }
   if (d.personDay) {
@@ -1489,12 +1548,30 @@ function setupAction(a) {
   st.error = '';
   if (a === 'new' || a === 'persons') st.step = 'persons';
   else if (a === 'start') st.step = 'start';
-  else if (a === 'rules') st.step = 'rules';
-  else if (a === 'plan-our' || a === 'plan-core') {
-    const our = a === 'plan-our';
-    st.tasks = autoSplit(our ? OUR_TASKS : CORE_TASKS);
-    st.planRules = our ? OUR_RULES : CORE_RULES;
-    st.step = 'split';
+  else if (a === 'rules' || a === 'areas') st.step = a;
+  else if (a === 'plan-our') {
+    Object.assign(st, { mode: 'our', tasks: autoSplit(OUR_TASKS), planRules: OUR_RULES, step: 'split' });
+  } else if (a === 'plan-suggest') {
+    if (st.mode !== 'suggest') Object.assign(st, { mode: 'suggest', pick: [], pickKey: null, openAreas: [] });
+    st.step = 'questions';
+  } else if (a === 'areas-suggest') {
+    const key = [...st.answers].sort().join();
+    if (st.pickKey !== key) Object.assign(st, { pick: suggestTasks(st.answers), pickKey: key, openAreas: [], ownArea: null });
+    st.planRules = suggestRules(st.answers);
+    st.step = 'areas';
+  } else if (a === 'plan-empty') {
+    if (st.mode !== 'empty') {
+      Object.assign(st, { mode: 'empty', pick: suggestTasks([]).map((t) => ({ ...t, on: false })), openAreas: [], ownArea: null, planRules: [] });
+    }
+    st.step = 'areas';
+  } else if (a === 'areas-next' || a === 'to-split') {
+    if (a === 'areas-next' && (st.mode === 'empty' || !pickedTasks().length)) {
+      st.rules = RULE_SUGGESTIONS.filter((r) => st.rules.includes(r) || st.planRules.includes(r));
+      st.step = 'rules';
+    } else {
+      st.tasks = autoSplit(pickedTasks().map(({ on, soft, ...t }) => t));
+      st.step = 'split';
+    }
   } else if (a === 'template') {
     if (st.persons.some((p) => !p.name.trim())) st.error = 'Bitte beide Namen eingeben.';
     else st.step = 'template';
@@ -1529,7 +1606,26 @@ function addOwnRule(again = true) {
   render();
   $('#newRule')?.focus();
 }
+// Bereiche-Auswahl: Rhythmus ändern; Gemeinsames folgt dem neuen Rhythmus, „pro Person“ bleibt
+function setPickKind(t, kind) {
+  Object.assign(t, PRESETS[kind]);
+  if (t.assign !== 'each') t.assign = defaultAssign(t);
+  if (kind === 'asneeded' && t.perMonth == null) t.perMonth = 1;
+}
+const clampMin = (v) => Math.max(0, Math.min(999, parseInt(v, 10) || 0));
+
 app.addEventListener('submit', (e) => {
+  if (e.target.id === 'ownForm') {
+    e.preventDefault();
+    const f = e.target.elements;
+    const title = f.title.value.trim();
+    if (!title) { $('[data-own-error]', e.target).textContent = 'Bitte einen Namen eingeben.'; return f.title.focus(); }
+    const t = { title, area: e.target.dataset.area, min: clampMin(f.min.value), note: '', season: null, on: true };
+    setPickKind(t, f.kind.value);
+    S.setup.pick.push(t);
+    S.setup.ownArea = null;
+    return renderSetup();
+  }
   if (e.target.id !== 'ruleForm') return;
   e.preventDefault();
   addOwnRule();
@@ -1538,6 +1634,8 @@ app.addEventListener('submit', (e) => {
 app.addEventListener('change', (e) => {
   const el = e.target;
   const d = el.dataset;
+  if (d.pick !== undefined) { S.setup.pick[+d.pick].on = el.checked; return renderSetup(); }
+  if (d.pickKind !== undefined) { setPickKind(S.setup.pick[+d.pickKind], el.value); $('#pickTotal').textContent = pickTotal(); return; }
   if (d.action === 'toggle') return toggle(el);
   if (d.action === 'toggle-rule') return toggleRule(el);
   if (d.action === 'toggle-step') return toggleStep(el);
@@ -1627,6 +1725,7 @@ app.addEventListener('toggle', (e) => {
 
 app.addEventListener('input', (e) => {
   const d = e.target.dataset;
+  if (d.pickMin !== undefined) { S.setup.pick[+d.pickMin].min = clampMin(e.target.value); $('#pickTotal').textContent = pickTotal(); }
   if (d.setupName !== undefined) {
     const p = S.setup.persons[+d.setupName];
     p.name = e.target.value;
