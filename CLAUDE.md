@@ -92,6 +92,7 @@ Gilt vor älteren Einträgen oben, wo sie sich widersprechen (Spielraum, Tauscht
 - Schlüssel bleiben sonst `weekly:<Montag>`/`biweekly:<Blockbeginn>`: bisherige Erledigungen gelten weiter, nichts wird umgeschrieben.
 - Statuskarte: Balken und „Deine Woche“ über `personalWeek` (ab dem ersten Putztag der Person). „heute x/y“, „Noch N offen“ und Zahl am Icon zählen nur `isPressing` (Termin und Tag danach, dazu Rotes); der Rest steht in der Liste und als „Noch N bis zum nächsten Termin“. Plan-Kalender und Statistik bleiben beim Kalender. „Ganzer Monat“ zählt über `dueBetween` die Termine im Monat, ohne eigene Änderung.
 - Abwesenheit: `myPaused` blendet Wöchentliches nur aus, wenn man heute weg ist oder der Termintag in die Abwesenheit fällt; verpasst wird nachgesehen, wenn die Abwesenheit die Zeit bis zum nächsten Termin berührt.
+- Editor (v36): „Termin“ bei wöchentlich bietet nur so viele Einträge wie Putztage (`putztagCount`, mit Tausch die höhere Zahl beider Personen) und ist bei einem Putztag ausgeblendet; `pos` bleibt dann gespeichert, falls später ein zweiter Putztag dazukommt.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
