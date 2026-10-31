@@ -1,7 +1,7 @@
 // Service Worker: App-Dateien für den Offline-Betrieb zwischenspeichern.
 // Eigene Dateien: erst Netz (am Server nachfragen statt 10 Min. Browser-Cache), sonst Cache. Firebase-Bibliothek: erst Cache.
 // Die Firestore-Daten selbst puffert Firebase eigenständig (IndexedDB).
-const CACHE = 'fairplan-v31';
+const CACHE = 'fairplan-v32';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.json', 'config.js',
   'js/app.js', 'js/logic.js', 'js/store.js', 'js/template.js', 'js/qrcode.js',
