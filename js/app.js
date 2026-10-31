@@ -2,7 +2,7 @@ import {
   KINDS, PRESETS, kindOf, evaluate, inSeason, relevantKeys, completionId,
   localToday, toDay, fromDay, windowsBetween, awayDuring,
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
-  packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling,
+  packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED } from './template.js';
@@ -32,7 +32,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.35';
+const APP_VERSION = '2.0.36';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -1849,11 +1849,18 @@ function openEditor(id) {
   };
   const upcoming = (task, n) => windowsBetween(task, S.hh, S.today, fromDay(toDay(S.today) + 400))
     .filter((w, i, a) => w.end >= S.today && a.findIndex((x) => x.key === w.key) === i).slice(0, n);
+  // Wie viele Putztage pro Woche hat, wer die Aufgabe übernehmen kann? (fester Tag: einer; mit Tausch: beide Personen)
+  const putztagCount = (d) => {
+    const pkg = d.assign === 'A' || d.assign === 'B';
+    const owners = d.assign === 'shared' ? [null]
+      : pkg && (d.fixed || !rotate) ? [ownerNow(d, S.hh, S.today)] : S.hh.persons.map((p) => p.id);
+    return Math.max(...owners.map((o) => daysFor(d, o, S.hh).length));
+  };
   // Termin-Auswahl: wöchentlich der wievielte Putztag, sonst die Woche im Zeitraum – mit dem nächsten Datum dazu
   const posOptions = () => {
     const d = draft({ pos: 0 });
     const k = kindOf(d);
-    const span = k === 'weekly' ? 3 : weeksPerPeriod(d);
+    const span = k === 'weekly' ? putztagCount(d) : weeksPerPeriod(d);
     const where = { biweekly: '', monthly: ' im Monat', quarterly: ' im Quartal', halfyear: ' im Halbjahr', yearly: ' im Jahr' }[k] ?? '';
     const cur = Math.min(f.pos.options.length ? +f.pos.value : +(t.pos ?? 0) || 0, span - 1);
     f.pos.innerHTML = Array.from({ length: span }, (_, i) => {
@@ -1868,6 +1875,7 @@ function openEditor(id) {
     $('[data-day]', form).hidden = !rhythm;
     $('[data-pos]', form).hidden = !rhythm;
     if (rhythm) posOptions();
+    if (k === 'weekly' && f.pos.options.length < 2) $('[data-pos]', form).hidden = true; // nur ein Putztag: nichts zu wählen
     const next = upcoming(draft(), 3).map((w) => (w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)}–${fmtWd(w.end)}`));
     $('[data-next]', form).textContent = next.length && k !== 'daily' ? `Nächste Termine: ${next.join(' · ')}` : '';
     paintPackages();
@@ -1907,7 +1915,7 @@ function openEditor(id) {
       ...assignValue(),
       season: seasonValue(),
       day: $('[data-day]', form).hidden || f.day.value === '' ? null : +f.day.value,
-      pos: $('[data-pos]', form).hidden ? null : +f.pos.value || 0,
+      pos: k === 'weekly' && f.pos.options.length < 2 ? t.pos ?? 0 : $('[data-pos]', form).hidden ? null : +f.pos.value || 0,
       created: t.created || S.today,
       order: t.order ?? Math.max(-1, ...S.tasks.map((x) => x.order ?? 0)) + 1,
       min: f.min.value === '' ? null : Math.max(0, Math.min(999, parseInt(f.min.value, 10) || 0)),
