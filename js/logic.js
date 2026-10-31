@@ -193,13 +193,20 @@ export function holidays(y) {
 
 // ---------- Zuteilung ----------
 
-// Paket A beginnt bei Person 1, Paket B bei Person 2; turns = wie oft bisher getauscht wurde (reihum).
-// swapped dreht nur um (alte Daten).
+// Je Person ein Paket: A beginnt bei Person 1, B bei Person 2 … Liefert die Person je Paket;
+// turns = wie oft bisher getauscht wurde, die Pakete wandern reihum. swapped dreht nur um (alte Daten).
+export const PACKAGES = ['A', 'B', 'C', 'D', 'E', 'F'];
+export const MAX_PERSONS = PACKAGES.length;
+export const isPackage = (assign) => PACKAGES.includes(assign);
 export function packageOwners(ctx, turns = 0) {
   const ids = ctx.persons.map((p) => p.id);
   if (ctx.swapped) ids.reverse();
-  return [ids[turns % ids.length], ids[(turns + 1) % ids.length]];
+  return ids.map((_, i) => ids[(turns + i) % ids.length]);
 }
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+// Würde die Aufgabe mit dem Monatstausch immer bei denselben Personen landen (etwa halbjährlich bei 2, vierteljährlich
+// bei 3)? Dann wechselt sie stattdessen je Durchgang.
+export const swapsByRound = (task, ctx) => task.unit === 'month' && gcd(task.n, ctx.persons.length) > 1;
 
 // Monatlicher Tausch: ctx.rotateFrom = 'YYYY-MM', ab dem Monat danach wird am 1. getauscht; null = aus.
 const rotationMonth = (ctx) => { const [y, m] = ctx.rotateFrom.split('-').map(Number); return y * 12 + m - 1; };
@@ -218,13 +225,11 @@ export function nextSwap(ctx, todayStr) {
 }
 
 // Tausche für eine Aufgabe, gezählt am Beginn ihrer Periode: Wer dort zuständig ist, bleibt es bis zum Ende.
-// Intervalle mit gerader Monatszahl (halbjährlich, jährlich) würden mit dem Monatstausch immer bei derselben
-// Person landen, sie wechseln deshalb je Durchgang.
 function turnsOf(task, period, day, ctx) {
   if (!ctx.rotateFrom || task.fixed) return 0;
   const start = period?.start ?? day;
   const base = rotationMonth(ctx);
-  if (task.unit === 'month' && task.n % 2 === 0) {
+  if (swapsByRound(task, ctx)) {
     const scheme = periodScheme(task, toDay(ctx.setup));
     return Math.max(0, scheme.indexAt(start) - scheme.indexAt(monthStart(base)));
   }
@@ -242,8 +247,7 @@ export function ownerOf(task, period, day, slot, ctx) {
       return ctx.persons[odd !== !!ctx.swapped ? 1 : 0].id;
     }
     default: {
-      const [a, b] = packageOwners(ctx, turnsOf(task, period, day, ctx));
-      return task.assign === 'A' ? a : b;
+      return packageOwners(ctx, turnsOf(task, period, day, ctx))[PACKAGES.indexOf(task.assign)];
     }
   }
 }
@@ -275,9 +279,8 @@ export function loadByPerson(tasks, ctx) {
   const out = Object.fromEntries(ctx.persons.map((p) => [p.id, 0]));
   for (const t of tasks) {
     const m = monthlyMinutes(t);
-    if (t.assign === 'A' || t.assign === 'B') {
-      const [a, b] = packageOwners(ctx);
-      out[t.assign === 'A' ? a : b] += m;
+    if (isPackage(t.assign)) {
+      out[packageOwners(ctx)[PACKAGES.indexOf(t.assign)]] += m;
     } else {
       for (const id in out) out[id] += t.assign === 'each' ? m : m / ctx.persons.length;
     }
@@ -289,16 +292,31 @@ export function loadByPerson(tasks, ctx) {
 // Jedes Intervall wird so geteilt, dass der bisherige Unterschied möglichst klein wird. So ist das Spürbare
 // (Wöchentliches) zuerst ausgeglichen, und seltene Aufgaben gleichen den Rest aus. Bei gleichem Ergebnis gewinnt
 // die gleichmäßigere Anzahl. Gemeinsames, Abwechselndes und „pro Person“ bleiben unverändert.
-export function autoSplit(tasks) {
+// Ab 3 Personen: ebenso von häufig nach selten, die größte Aufgabe zuerst, jeweils an das Paket mit der wenigsten Zeit.
+export function autoSplit(tasks, persons = 2) {
   const groups = new Map();
   tasks.forEach((t, i) => {
-    if (t.assign !== 'A' && t.assign !== 'B') return;
+    if (!isPackage(t.assign)) return;
     const g = `${t.n}${t.unit}`;
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(i);
   });
   const length = (t) => (t.unit === 'need' ? Infinity : t.n * { day: 1, week: 7, month: 30 }[t.unit]);
   const ordered = [...groups.values()].sort((a, b) => length(tasks[a[0]]) - length(tasks[b[0]]));
+  if (persons > 2) {
+    const load = Array(persons).fill(0);
+    const assign = new Map();
+    for (const idx of ordered) {
+      const count = Array(persons).fill(0);
+      [...idx].sort((a, b) => monthlyMinutes(tasks[b]) - monthlyMinutes(tasks[a])).forEach((i) => {
+        const to = load.map((m, p) => p).sort((a, b) => load[a] - load[b] || count[a] - count[b] || a - b)[0];
+        load[to] += monthlyMinutes(tasks[i]);
+        count[to]++;
+        assign.set(i, PACKAGES[to]);
+      });
+    }
+    return tasks.map((t, i) => (assign.has(i) ? { ...t, assign: assign.get(i) } : t));
+  }
 
   let lead = 0; // Vorsprung von A in Minuten pro Monat
   const assign = new Map();
@@ -405,7 +423,7 @@ function rollingTerms(task, ctx, slot, fromI, toI) {
   const scheme = periodScheme(task, toDay(ctx.setup));
   const start = startOf(task, ctx);
   const len = task.n * 7;
-  const pkg = task.assign === 'A' ? 0 : task.assign === 'B' ? 1 : -1;
+  const pkg = PACKAGES.indexOf(task.assign);
   const byMonth = kindOf(task) === 'weekly' && ctx.rotateFrom && !task.fixed && pkg >= 0;
   const terms = [];
   for (let k = fromI; k <= toI + 3; k++) {
@@ -480,7 +498,7 @@ function evaluateNeed(task, ctx, todayStr, completions) {
   return slotsOf(task, ctx).map((slot) => {
     const done = completions.get(completionId(task.id, key, slot)) || null;
     const owner = task.assign === 'each' ? slot
-      : task.assign === 'A' || task.assign === 'B' ? ownerOf(task, null, today, slot, ctx) : null;
+      : isPackage(task.assign) ? ownerOf(task, null, today, slot, ctx) : null;
     return {
       task, slot, owner, status: offseason ? 'offseason' : done ? 'done' : 'need',
       key: offseason ? null : key, due: null, end: null, completion: done, next: null,
@@ -665,6 +683,17 @@ export function dueBetween(tasks, ctx, fromStr, toStr, doneById, me) {
     }
   }
   return out;
+}
+
+// ---------- Meine Haushalte (nur auf diesem Gerät) ----------
+
+// Eintrag { code, names, me, setup } aktualisieren; Reihenfolge bleibt, neue kommen nach vorne.
+// Liefert dieselbe Liste, wenn sich nichts geändert hat.
+export function upsertHome(list, entry) {
+  const i = list.findIndex((h) => h.code === entry.code);
+  if (i < 0) return [entry, ...list];
+  if (JSON.stringify(list[i]) === JSON.stringify(entry)) return list;
+  return list.map((h, k) => (k === i ? entry : h));
 }
 
 // ---------- Gemeinsames Ziel ----------

@@ -3,6 +3,7 @@ import {
   localToday, toDay, fromDay, windowsBetween, awayDuring,
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, weekStreaks,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
+  PACKAGES, MAX_PERSONS, isPackage, swapsByRound, upsertHome,
   goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
@@ -23,9 +24,9 @@ const SHORT_KIND = {
   daily: 'täglich', weekly: 'wöchentlich', biweekly: '2 Wochen', monthly: 'monatlich',
   quarterly: 'vierteljährlich', halfyear: 'halbjährlich', yearly: 'jährlich', asneeded: 'bei Bedarf',
 };
-const ASSIGN_LABEL = { A: 'Person 1', B: 'Person 2', shared: 'Gemeinsam', each: 'Pro Person', alternate: 'Abwechselnd' };
-// Zuteilung mit Namen: Paket A = Person 1, Paket B = Person 2 (fix)
-const assignLabel = (a) => (a === 'A' || a === 'B' ? esc(S.hh?.persons[a === 'A' ? 0 : 1]?.name ?? ASSIGN_LABEL[a]) : ASSIGN_LABEL[a]);
+const ASSIGN_LABEL = { shared: 'Gemeinsam', each: 'Pro Person', alternate: 'Abwechselnd' };
+// Zuteilung mit Namen: Paket A = Person 1, Paket B = Person 2 …
+const assignLabel = (a) => (isPackage(a) ? esc(S.hh?.persons[PACKAGES.indexOf(a)]?.name ?? `Person ${PACKAGES.indexOf(a) + 1}`) : ASSIGN_LABEL[a]);
 const UNIT_LABEL = { day: ['Tag', 'Tage'], week: ['Woche', 'Wochen'], month: ['Monat', 'Monate'] };
 const MONTHS = Array.from({ length: 12 }, (_, i) => new Date(2000, i, 1).toLocaleDateString('de-AT', { month: 'long' }));
 const DEFAULT_HOUSEHOLD = {
@@ -33,7 +34,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.39';
+const APP_VERSION = '2.0.41';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -181,7 +182,7 @@ const cookieAttrs = () => `path=${location.pathname.replace(/[^/]*$/, '')};SameS
 function keepIdentity() {
   if (!S.code) return;
   document.cookie = `fairplan=${S.code}.${S.me || ''};max-age=63072000;${cookieAttrs()}`;
-  keepStore('readwrite', (st) => st.put({ code: S.code, me: S.me }, 'id')).catch(() => {});
+  return keepStore('readwrite', (st) => st.put({ code: S.code, me: S.me }, 'id')).catch(() => {});
 }
 function forgetIdentity() {
   document.cookie = `fairplan=;max-age=0;${cookieAttrs()}`;
@@ -218,7 +219,7 @@ async function init() {
   const join = normalizeCode(new URLSearchParams(location.search).get('join') || '');
   if (standalone()) history.replaceState(null, '', location.pathname);
   if (join.length === 16 && join !== S.code
-    && (!S.code || confirm('Diesem Haushalt beitreten? Der bisherige wird auf diesem Gerät abgemeldet.'))) {
+    && (!S.code || confirm('Diesem Haushalt beitreten? Der bisherige bleibt unter Mehr › Meine Haushalte.'))) {
     ls.set('me', null);
     ls.set('accent', null);
     delete document.documentElement.dataset.accent;
@@ -328,6 +329,7 @@ function render() {
     return;
   }
   if (!person(S.me)) return renderWhoAmI();
+  rememberHome();
 
   syncAccent();
   const recent = fromDay(toDay(S.today) - 62);
@@ -358,6 +360,7 @@ const MAIN = { heute: () => viewToday(), plan: () => viewPlan(), statistik: () =
 const PAGES = {
   profil: ['Profil', () => viewProfile()],
   haushalt: ['Haushalt', () => viewHousehold()],
+  haushalte: ['Meine Haushalte', () => viewHomes()],
   code: ['Haushalts-Code', () => viewCode()],
   aufgaben: ['Aufgabenliste', () => viewTasks()],
   abmachungen: ['Abmachungen', () => viewRules()],
@@ -591,7 +594,7 @@ function viewToday() {
   const myJoker = jokerOf(S.hh, S.me);
   const jokerLabel = myJoker.count ? `${myJoker.count} Joker` : rules.length ? `noch ${JOKER_PRICE - myJoker.progress} bis Joker` : '';
 
-  const card = `${goalNote()}${swapNote()}<section class="card ${allDone ? 'alldone' : ''}">
+  const card = `${movedNote()}${goalNote()}${swapNote()}<section class="card ${allDone ? 'alldone' : ''}">
       <div><span class="card-label">Deine Aufgaben heute</span>
         <span class="card-big">${x}<small> / ${y}</small></span></div>
       ${weekAll || bonus || jokerLabel ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus || jokerLabel ? `<span class="pill">${[bonus ? `+${bonus} extra` : '', jokerLabel].filter(Boolean).join(' · ')}</span>` : ''}</div>
@@ -669,8 +672,8 @@ function goalNote() {
 function swapNote() {
   const turns = swapCount(S.hh, S.today);
   if (!turns || ls.get('swap-seen') === S.today.slice(0, 7)) return '';
-  const pkg = packageOwners(S.hh, turns)[0] === S.me ? 'A' : packageOwners(S.hh, turns)[1] === S.me ? 'B' : null;
-  const mine = S.tasks.filter((t) => t.assign === pkg && !t.fixed && !(t.unit === 'month' && t.n % 2 === 0));
+  const pkg = PACKAGES[packageOwners(S.hh, turns).indexOf(S.me)];
+  const mine = S.tasks.filter((t) => t.assign === pkg && !t.fixed && !swapsByRound(t, S.hh));
   const weekly = mine.filter((t) => kindOf(t) === 'weekly').map((t) => esc(t.title));
   const rest = mine.length - weekly.length;
   const list = weekly.length ? `${weekly.join(', ')}${rest ? ` und ${rest} weitere` : ''}` : `${rest} Aufgaben`;
@@ -989,6 +992,7 @@ function viewMore() {
   return `<button class="ptile" data-go="profil">${avatar(me, 'l')}<span>${esc(me.name)}</span><span class="chev">${icon('chevron', 18)}</span></button>
     <h2>Wir</h2><div class="tile">
       ${goRow('haushalt', 'users', 'Haushalt')}
+      ${homes().length > 1 ? goRow('haushalte', 'list', 'Meine Haushalte', homes().length) : ''}
       ${goRow('putztag', 'plan', putztagWord(hh.sharedDays, 'Gemeinsamer Putztag', 'Gemeinsame Putztage'), shared)}
       ${goRow('abwesenheit', 'away', 'Abwesenheit', awayNames || 'Keine')}
     </div>
@@ -1048,7 +1052,52 @@ function viewHousehold() {
   return `<h2>Personen</h2><div class="tile">${rows}</div>
     <span class="hint">Jede Person ändert Name und Farbe in ihrem eigenen Profil.</span>
     <button class="addrow" data-go="code">${icon('plus', 18)}Person einladen</button>
-    <h2>Gemeinsames Ziel</h2>${goalBlock(goalOf(S.hh))}`;
+    <h2>Gemeinsames Ziel</h2>${goalBlock(goalOf(S.hh))}
+    <h2>Mehr oder weniger Personen?</h2>
+    <p class="small">Dafür legt ihr einen neuen Haushalt an und beginnt bei null. Der alte bleibt erhalten.</p>
+    <button class="addrow" data-action="new-home">${icon('plus', 18)}Neuen Haushalt anlegen</button>`;
+}
+
+// Meine Haushalte: Liste nur auf diesem Gerät, kostet keine Lesezugriffe. Entfernen löscht nichts in der Datenbank.
+function homes() {
+  try { return JSON.parse(ls.get('homes')) || []; } catch { return []; }
+}
+function rememberHome() {
+  const list = homes();
+  const next = upsertHome(list, { code: S.code, names: S.hh.persons.map((p) => p.name).join(', '), me: S.me, setup: S.hh.setup });
+  if (next !== list) ls.set('homes', JSON.stringify(next));
+}
+const homeRow = (h) => `<div class="mrow"><button class="home-open" data-home="${esc(h.code)}"><span class="l">${esc(h.names)}<small>${h.code === S.code ? 'Aktuell · ' : ''}seit ${fmtDate(h.setup, true)}</small></span></button>${h.code === S.code ? '' : `<button class="home-remove" data-home-remove="${esc(h.code)}" aria-label="Aus der Liste entfernen">×</button>`}</div>`;
+function viewHomes() {
+  return `<div class="tile">${homes().map(homeRow).join('')}</div>
+    <span class="hint">Die Liste gibt es nur auf diesem Gerät. Entfernen löscht nichts, mit dem Code kommst du jederzeit wieder hinein.</span>
+    <button class="addrow" data-action="new-home">${icon('plus', 18)}Neuen Haushalt anlegen</button>`;
+}
+// Wechseln: neu laden, damit nichts vom anderen Haushalt übrig bleibt
+async function switchHome(code) {
+  const me = homes().find((h) => h.code === code)?.me ?? null;
+  for (const k of ['code', 'me', 'accent', 'swap-seen', 'goal-seen', 'goal-star']) ls.set(k, null);
+  ls.set('code', code);
+  ls.set('me', me);
+  S.code = code;
+  S.me = me;
+  await keepIdentity();
+  location.replace(location.pathname);
+}
+function newHome() {
+  if (!confirm('Neuen Haushalt anlegen?\n\nIhr beginnt bei null: neue Aufgaben, neuer Verlauf, neue Statistik. Der alte Haushalt bleibt erhalten, du findest ihn unter Mehr › Meine Haushalte.')) return;
+  const from = S.code;
+  startSetup();
+  Object.assign(S.setup, { step: 'persons', from });
+  window.scrollTo(0, 0);
+  renderSetup();
+}
+// Im alten Haushalt: Hinweis auf den neuen, einmal wegtippbar
+function movedNote() {
+  const to = S.hh.movedTo;
+  if (!to || ls.get('moved-stay') === to) return '';
+  return `<section class="awaynote movednote" style="--pc:var(--accent)">Es gibt einen neuen Haushalt. Willst du wechseln?
+    <div class="btnrow"><button class="btn" data-action="move-stay">Hier bleiben</button><button class="btn primary" data-action="move-go">Wechseln</button></div></section>`;
 }
 
 // Ziel und Belohnung: gleiche Bausteine beim Einrichten und unter Mehr › Haushalt
@@ -1084,7 +1133,7 @@ function viewAway() {
         <label class="field">bis<input type="date" data-away-to="${p.id}" value="${esc(a.to || '')}"></label></div>
       ${a.from || a.to ? `<button class="btn block" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}`;
   }).join('');
-  return `${rows}<span class="hint">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn beide weg sind.</span>`;
+  return `${rows}<span class="hint">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn alle weg sind.</span>`;
 }
 
 const viewRules = () => {
@@ -1132,15 +1181,15 @@ function startSetup(reset = false) {
 }
 
 const hours = (min) => (min / 60).toLocaleString('de-AT', { maximumFractionDigits: 1 });
-const setupCtx = () => ({ ...DEFAULT_HOUSEHOLD, setup: S.setup.start, persons: [{ id: 'p1' }, { id: 'p2' }] });
-// Stunden pro Woche für beide zusammen
+const setupCtx = () => ({ ...DEFAULT_HOUSEHOLD, setup: S.setup.start, persons: S.setup.persons.map((_, i) => ({ id: `p${i + 1}` })) });
+// Stunden pro Woche für alle zusammen
 const weekMinutes = (tasks) => Object.values(loadByPerson(tasks, setupCtx())).reduce((a, b) => a + b, 0) / 4.3;
 
 // Bereiche-Auswahl
 const pickedTasks = () => S.setup.pick.filter((t) => t.on);
 const pickTotal = () => {
   const min = weekMinutes(pickedTasks());
-  return `Pro Woche ${hours(min)} h · pro Person ${hours(min / 2)} h`;
+  return `Pro Woche ${hours(min)} h · pro Person ${hours(min / S.setup.persons.length)} h`;
 };
 const kindOptions = (cur) => KINDS.filter((k) => k !== 'custom').map((k) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${KIND_LABEL[k]}</option>`).join('');
 const pickRow = (t) => {
@@ -1190,9 +1239,11 @@ function renderSetup() {
       <div class="btnrow"><button class="btn primary block" data-setup="new">Haushalt neu anlegen</button></div>
       <h2>Beitreten</h2>
       <label class="field">Haushalts-Code<input type="text" id="joinCode" class="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX"></label>
-      <div class="btnrow"><button class="btn block" data-setup="join">Beitreten</button></div>${err}${local}`;
+      <div class="btnrow"><button class="btn block" data-setup="join">Beitreten</button></div>${err}${homes().length ? `<h2>Meine Haushalte</h2><div class="tile">${homes().map(homeRow).join('')}</div>` : ''}${local}`;
   } else if (st.step === 'persons') {
     body = `<h2>${st.reset ? 'Plan neu einrichten · ' : ''}Personen</h2>
+      ${st.reset ? '' : `<p class="small">Wie viele seid ihr? Später ändern heißt: neuen Haushalt anlegen.</p>
+        <div class="filters">${Array.from({ length: MAX_PERSONS - 1 }, (_, i) => i + 2).map((n) => `<button data-setup-count="${n}" aria-pressed="${st.persons.length === n}">${n}</button>`).join('')}</div>`}
       ${st.persons.map((p, i) => `<section class="tile setup-person">
         <div class="setup-head">${avatar({ ...p, name: p.name || `${i + 1}` }, 'l')}<strong>Person ${i + 1}</strong></div>
         <h2><label for="sname${i}">Name</label></h2>
@@ -1203,13 +1254,14 @@ function renderSetup() {
       <section class="tile setup-person"><h2 style="margin-top:0">${putztagWord(st.shared, 'Gemeinsamer Putztag', 'Gemeinsame Putztage')}</h2>${dayChips(st.shared, 'data-setup-shared')}
         <span class="hint">Ein oder mehrere Tage, später im Profil und unter „Mehr“ änderbar.</span></section>
       ${err}
-      <div class="btnrow"><button class="btn" data-setup="${st.reset ? 'cancel' : 'start'}">${st.reset ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
+      <div class="btnrow"><button class="btn" data-setup="${st.reset || st.from ? 'cancel' : 'start'}">${st.reset || st.from ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
   } else if (st.step === 'template') {
+    // Die Vorschläge sind auf 2 Personen geschätzt
     body = `<h2>Vorlage</h2>
-      <button class="choice" data-setup="plan-our"><strong>Daniel und Sabrina</strong>
+      ${st.persons.length > 2 ? '<p class="small">Du wählst die Aufgaben selbst aus, fair aufgeteilt werden sie danach automatisch.</p>' : `<button class="choice" data-setup="plan-our"><strong>Daniel und Sabrina</strong>
         <span>Unser Plan: ${OUR_TASKS.length} Aufgaben, ca. ${hours(weekMinutes(OUR_TASKS))} h pro Woche, dazu ${OUR_RULES.length} Abmachungen</span></button>
       <button class="choice" data-setup="plan-suggest"><strong>Vorschlag 2-Personen-Haushalt</strong>
-        <span>Ein paar Fragen, dann die passenden Aufgaben vorausgewählt und fair aufgeteilt</span></button>
+        <span>Ein paar Fragen, dann die passenden Aufgaben vorausgewählt und fair aufgeteilt</span></button>`}
       <button class="choice" data-setup="plan-empty"><strong>Leer starten</strong>
         <span>Aufgaben nach Bereichen selbst auswählen</span></button>${err}
       ${st.reset ? '<p class="small">Die bisherigen Aufgaben werden ersetzt. Code, Verbindung und Verlauf bleiben.</p>' : ''}
@@ -1229,16 +1281,15 @@ function renderSetup() {
     const load = loadByPerson(st.tasks, setupCtx());
     const names = st.persons.map((p) => esc(p.name.trim()));
     const list = (pkg) => st.tasks.map((t, i) => [t, i]).filter(([t]) => t.assign === pkg).map(([t, i]) => `
-      <button class="rowbtn" data-split="${i}"><span>${esc(t.title)}<br><span class="meta">${t.min} Min · ${intervalLabel(t)} · ${hours(monthlyMinutes(t))} h/Monat</span></span><span class="meta">tauschen</span></button>`).join('');
+      <button class="rowbtn" data-split="${i}"><span>${esc(t.title)}<br><span class="meta">${t.min} Min · ${intervalLabel(t)} · ${hours(monthlyMinutes(t))} h/Monat</span></span><span class="meta">${st.persons.length > 2 ? 'weitergeben' : 'tauschen'}</span></button>`).join('');
     body = `<h2>Aufteilung</h2>
-      <div class="banner now">${names[0]} <strong>${hours(load.p1)} h</strong> · ${names[1]} <strong>${hours(load.p2)} h</strong> pro Monat</div>
-      <p class="small">Automatisch fair verteilt: insgesamt möglichst gleich viel Zeit (Dauer × Häufigkeit), das Häufige zuerst. Antippen gibt eine Aufgabe der anderen Person – die Bilanz rechnet mit. Gemeinsames zählt je zur Hälfte. Zeiten kannst du später bei jeder Aufgabe ändern.</p>
+      <div class="banner now">${names.map((n, i) => `${n} <strong>${hours(load[`p${i + 1}`])} h</strong>`).join(' · ')} pro Monat</div>
+      <p class="small">Automatisch fair verteilt: insgesamt möglichst gleich viel Zeit (Dauer × Häufigkeit), das Häufige zuerst. Antippen gibt eine Aufgabe ${st.persons.length > 2 ? 'der nächsten' : 'der anderen'} Person – die Bilanz rechnet mit. Gemeinsames zählt ${st.persons.length > 2 ? 'zu gleichen Teilen' : 'je zur Hälfte'}. Zeiten kannst du später bei jeder Aufgabe ändern.</p>
       <div class="tile">${switchLine('setup-rotate', 'refresh', 'Monatlich tauschen', st.rotate
-        ? `Die beiden Listen tauschen jeden Monat, Halbjährliches und Jährliches bei jedem Durchgang. Erster Tausch am ${fmtDate(nextSwap({ rotateFrom: rotationBase(st.start) }, st.start))}`
+        ? `${st.persons.length > 2 ? 'Die Listen wandern jeden Monat reihum' : 'Die beiden Listen tauschen jeden Monat'}, Halbjährliches und Jährliches bei jedem Durchgang. Erster Tausch am ${fmtDate(nextSwap({ rotateFrom: rotationBase(st.start) }, st.start))}`
         : 'Aufgaben bleiben fix bei einer Person. Unter „Mehr“ kannst du das später ändern.', st.rotate)}</div>
-      <h2><i class="sw" style="--pc:var(--c-${st.persons[0].color})"></i>${names[0]}</h2><div class="rows">${list('A')}</div>
-      <h2><i class="sw" style="--pc:var(--c-${st.persons[1].color})"></i>${names[1]}</h2><div class="rows">${list('B')}</div>
-      <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und ${setupRules(true).length} Abmachungen.</p>
+      ${st.persons.map((p, i) => `<h2><i class="sw" style="--pc:var(--c-${p.color})"></i>${names[i]}</h2><div class="rows">${list(PACKAGES[i])}</div>`).join('')}
+      <p class="small">Dazu ${st.tasks.filter((t) => !isPackage(t.assign)).length} gemeinsame, abwechselnde oder persönliche Aufgaben und ${setupRules(true).length} Abmachungen.</p>
       ${err}
       <div class="btnrow"><button class="btn" data-setup="${{ our: 'template', suggest: 'areas', empty: 'rules' }[st.mode]}">Zurück</button><button class="btn primary" data-setup="to-goal">Weiter</button></div>`;
   } else if (st.step === 'goal') {
@@ -1248,7 +1299,7 @@ function renderSetup() {
       <div class="btnrow"><button class="btn" data-setup="back-split">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
   } else if (st.step === 'rules') {
     body = `<h2>Abmachungen</h2>
-      <p class="small">Selbstverständliches für jeden Tag – für beide abhakbar, nie „offen“. Später in den Optionen änderbar.</p>
+      <p class="small">Selbstverständliches für jeden Tag – für alle abhakbar, nie „offen“. Später in den Optionen änderbar.</p>
       ${ruleChips(st.rules, 'data-setup-rule')}${err}
       <div class="btnrow"><button class="btn" data-setup="areas">Zurück</button>${pickedTasks().length
         ? '<button class="btn primary" data-setup="to-split">Weiter</button>'
@@ -1257,7 +1308,7 @@ function renderSetup() {
     body = '<p class="loading">Einen Moment …</p>';
   } else if (st.step === 'created') {
     body = `<h2>Haushalt angelegt</h2>
-      <p>Jetzt ${esc(st.persons[1].name.trim())} einladen: QR-Code mit der Handy-Kamera scannen oder den Link schicken.</p>
+      <p>Jetzt ${st.persons.slice(1).map((p) => esc(p.name.trim())).join(', ').replace(/, ([^,]*)$/, ' und $1')} einladen: QR-Code mit der Handy-Kamera scannen oder den Link schicken.</p>
       ${inviteBlock()}
       <div class="btnrow"><button class="btn primary block" data-setup="done">Weiter</button></div>`;
   } else if (st.step === 'joined') {
@@ -1300,6 +1351,8 @@ async function createHousehold(withTemplate) {
     Object.assign(st, { step: 'template', error: 'Anlegen fehlgeschlagen. Bist du online und ist Firebase eingerichtet?' });
     return renderSetup();
   }
+  if (st.from) await S.store.updateHousehold(st.from, { movedTo: code });
+  for (const k of ['swap-seen', 'goal-seen', 'goal-star']) ls.set(k, null);
   ls.set('code', code);
   S.code = code;
   ls.set('me', 'p1'); // wer anlegt, ist Person 1
@@ -1613,6 +1666,11 @@ app.addEventListener('click', (e) => {
   if (!el || el.disabled) return;
   const d = el.dataset;
   if (d.view) { S.stack = []; S.view = d.view; window.scrollTo(0, 0); return render(); }
+  if (d.home) return d.home === S.code ? undefined : void switchHome(d.home);
+  if (d.homeRemove) {
+    ls.set('homes', JSON.stringify(homes().filter((h) => h.code !== d.homeRemove)));
+    return render();
+  }
   if (d.go) { S.stack.push(S.view); S.view = d.go; history.pushState(null, ''); window.scrollTo(0, 0); return render(); }
   if (el.matches('[data-back]')) { S.addRule = false; return history.back(); }
   if (d.filter) { S.filter = d.filter; return render(); }
@@ -1648,6 +1706,15 @@ app.addEventListener('click', (e) => {
     const cur = S.setup ? S.setup.goal.reward : goalOf(S.hh).reward;
     return setGoal({ reward: cur === d.goalReward ? '' : d.goalReward });
   }
+  if (d.setupCount) {
+    const list = S.setup.persons.slice(0, +d.setupCount);
+    while (list.length < +d.setupCount) {
+      const color = ['violett', 'gruen', 'blau', 'rosa', 'gelb', 'orange'].find((c) => !list.some((p) => p.color === c));
+      list.push({ name: '', color, days: [5] });
+    }
+    S.setup.persons = list;
+    return renderSetup();
+  }
   if (d.setupColor) { S.setup.persons[+d.setupColor].color = d.color; return renderSetup(); }
   if (d.setupRule) { S.setup.rules = toggled(S.setup.rules, d.setupRule); return renderSetup(); }
   if (d.setupQ) { S.setup.answers = toggled(S.setup.answers, d.setupQ); return renderSetup(); }
@@ -1666,7 +1733,7 @@ app.addEventListener('click', (e) => {
   if (el.matches('[data-shared-day]')) return updateHH({ sharedDays: toggledDay(S.hh.sharedDays?.length ? S.hh.sharedDays : [5], +d.wd) });
   if (d.split) {
     const t = S.setup.tasks[+d.split];
-    t.assign = t.assign === 'A' ? 'B' : 'A';
+    t.assign = PACKAGES[(PACKAGES.indexOf(t.assign) + 1) % S.setup.persons.length];
     return renderSetup();
   }
   if (d.ruleSuggest) {
@@ -1706,8 +1773,12 @@ app.addEventListener('click', (e) => {
     case 'badge':
       Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});
       return;
+    case 'new-home': return newHome();
+    case 'move-go': return void switchHome(S.hh.movedTo);
+    case 'move-stay': ls.set('moved-stay', S.hh.movedTo); return render();
     case 'leave':
       if (!confirm('Haushalt auf diesem Gerät abmelden?')) return;
+      ls.set('homes', JSON.stringify(homes().filter((h) => h.code !== S.code)));
       ls.set('code', null); ls.set('me', null); ls.set('accent', null);
       forgetIdentity().finally(() => location.replace(location.pathname)); // ohne ?join=, sonst wäre man gleich wieder drin
   }
@@ -1720,7 +1791,7 @@ function setupAction(a) {
   else if (a === 'start') st.step = 'start';
   else if (a === 'rules' || a === 'areas') st.step = a;
   else if (a === 'plan-our') {
-    Object.assign(st, { mode: 'our', tasks: autoSplit(OUR_TASKS), planRules: OUR_RULES, step: 'split' });
+    Object.assign(st, { mode: 'our', tasks: autoSplit(OUR_TASKS, st.persons.length), planRules: OUR_RULES, step: 'split' });
   } else if (a === 'plan-suggest') {
     if (st.mode !== 'suggest') Object.assign(st, { mode: 'suggest', pick: [], pickKey: null, openAreas: [] });
     st.step = 'questions';
@@ -1739,20 +1810,23 @@ function setupAction(a) {
       st.rules = RULE_SUGGESTIONS.filter((r) => st.rules.includes(r) || st.planRules.includes(r));
       st.step = 'rules';
     } else {
-      st.tasks = autoSplit(pickedTasks().map(({ on, soft, ...t }) => t));
+      st.tasks = autoSplit(pickedTasks().map(({ on, soft, ...t }) => t), st.persons.length);
       st.step = 'split';
     }
   } else if (a === 'to-goal') st.step = 'goal';
   else if (a === 'back-split') st.step = 'split';
   else if (a === 'template') {
-    if (st.persons.some((p) => !p.name.trim())) st.error = 'Bitte beide Namen eingeben.';
+    if (st.persons.some((p) => !p.name.trim())) st.error = st.persons.length > 2 ? 'Bitte alle Namen eingeben.' : 'Bitte beide Namen eingeben.';
     else st.step = 'template';
   } else if (a === 'create-template' || a === 'create-empty') {
     const tpl = a === 'create-template';
     return st.reset ? resetPlan(tpl) : createHousehold(tpl);
   } else if (a === 'join') return joinHousehold();
   else if (a === 'cancel') { S.setup = null; return render(); }
-  else if (a === 'done') { S.setup = null; connect(S.code); return; }
+  else if (a === 'done') {
+    if (st.from) { location.replace(location.pathname); return; } // neu laden, nichts vom alten Haushalt mitnehmen
+    S.setup = null; connect(S.code); return;
+  }
   window.scrollTo(0, 0);
   renderSetup();
   if (st.error) $('#app .ov')?.scrollIntoView({ block: 'center' });
@@ -1920,11 +1994,11 @@ const sheet = $('#sheet');
 
 // Zuteilung im Editor: bei monatlichem Tausch Pakete und „Fix bei“, sonst die Personen
 function assignOptions(t, rotate, opt) {
-  const cur = rotate && t.fixed && (t.assign === 'A' || t.assign === 'B') ? `fix-${t.assign}` : t.assign;
-  const name = (pkg) => esc(S.hh.persons[pkg === 'A' ? 0 : 1].name);
+  const cur = rotate && t.fixed && isPackage(t.assign) ? `fix-${t.assign}` : t.assign;
+  const pkgs = S.hh.persons.map((p, i) => [PACKAGES[i], esc(p.name)]);
   const people = rotate
-    ? [['A', ''], ['B', ''], ['fix-A', `Fix bei ${name('A')}`], ['fix-B', `Fix bei ${name('B')}`]]
-    : [['A', name('A')], ['B', name('B')]];
+    ? [...pkgs.map(([k]) => [k, '']), ...pkgs.map(([k, n]) => [`fix-${k}`, `Fix bei ${n}`])]
+    : pkgs;
   return [
     ...people,
     ['shared', 'Gemeinsam (jede/r darf abhaken)'],
@@ -1985,7 +2059,7 @@ function openEditor(id) {
   const paintPackages = () => {
     if (!rotate) return;
     for (const o of f.assign.options) {
-      if (o.value !== 'A' && o.value !== 'B') continue;
+      if (!isPackage(o.value)) continue;
       const owner = ownerNow(draft({ assign: o.value, fixed: false }), S.hh, S.today);
       o.textContent = `Paket ${o.value} (jetzt ${S.hh.persons.find((p) => p.id === owner)?.name ?? ''})`;
     }
@@ -2004,7 +2078,7 @@ function openEditor(id) {
     .filter((w, i, a) => w.end >= S.today && a.findIndex((x) => x.key === w.key) === i).slice(0, n);
   // Wie viele Putztage pro Woche hat, wer die Aufgabe übernehmen kann? (fester Tag: einer; mit Tausch: beide Personen)
   const putztagCount = (d) => {
-    const pkg = d.assign === 'A' || d.assign === 'B';
+    const pkg = isPackage(d.assign);
     const owners = d.assign === 'shared' ? [null]
       : pkg && (d.fixed || !rotate) ? [ownerNow(d, S.hh, S.today)] : S.hh.persons.map((p) => p.id);
     return Math.max(...owners.map((o) => daysFor(d, o, S.hh).length));
