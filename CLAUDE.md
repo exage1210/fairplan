@@ -130,6 +130,11 @@ Gilt vor älteren Einträgen oben („Paket A/B“, „2 Personen“).
 - `switchHome` lädt die Seite neu, damit nichts vom anderen Haushalt übrig bleibt.
 - Haushalte aller Nutzer sind bewusst nicht auflistbar (Regeln). Echtes Löschen fehlt noch: vor dem Verkauf, mit Bestätigung aller und Frist, dafür Regeln ändern.
 
+## Start beim Einrichten (31.10.2026, v42)
+- Letzter Schritt der Einrichtung (Ziel, beim leeren Start ohne Aufgaben die Abmachungen): Zeile `startLine` „Start: heute · erster Tausch am …“, „ändern“ öffnet ein Datumsfeld. Nicht in der Vergangenheit; das geht weiter unter Mehr › Start des Plans. Das Feld zeichnet nicht neu, sonst schlösse sich am iPhone die Auswahl.
+- Vor dem Start zeigt die Statuskarte „Euer Plan startet am …“, nichts ist fällig oder rot. Abmachungen und Bei Bedarf gehen schon.
+- Mehr › Start des Plans: Solange noch nicht getauscht wurde, rückt der erste Tausch mit (`rotationBase`), danach bleibt er.
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.

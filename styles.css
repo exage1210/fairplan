@@ -560,3 +560,6 @@ details.more[open] > summary::after { content: " ▾"; }
 .home-open .l { display: block; }
 .home-remove { flex-shrink: 0; width: 36px; height: 36px; border: 0; border-radius: 50%; background: var(--surface-2); color: var(--fg-2); font-size: 18px; cursor: pointer; }
 .movednote .btnrow { margin-top: 10px; }
+.startline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 14px; font-size: 14px; color: var(--fg-2); }
+.startline .field { width: 100%; margin-top: 6px; }
+.linkbtn { padding: 2px 0; border: 0; background: none; color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; }
