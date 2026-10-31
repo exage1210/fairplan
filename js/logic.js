@@ -361,10 +361,60 @@ function periodsAround(task, ctx, today) {
   return { scheme, i, cur: gap ? null : cur, prev };
 }
 
+// Persönliche Woche: Wöchentliches und „alle 2 Wochen“ laufen vom Termin bis zum Tag vor dem nächsten, ohne Spielraum.
+export const isRolling = (task) => ['weekly', 'biweekly'].includes(kindOf(task));
+
+// Termine der Perioden fromI…toI, nach Datum: [{ p, owner, due, end, key, counts }].
+// Wöchentliches mit Tausch gehört der Person, deren Putztag im passenden Monat liegt. Eine Woche kann so zwei Termine
+// haben (der zweite bekommt den Schlüssel mit „b“) oder keinen. „Alle 2 Wochen“ hat immer einen Termin je Block,
+// sonst fiele beim Tausch ein ganzer Durchgang aus oder käme doppelt.
+function rollingTerms(task, ctx, slot, fromI, toI) {
+  const scheme = periodScheme(task, toDay(ctx.setup));
+  const start = startOf(task, ctx);
+  const len = task.n * 7;
+  const pkg = task.assign === 'A' ? 0 : task.assign === 'B' ? 1 : -1;
+  const byMonth = kindOf(task) === 'weekly' && ctx.rotateFrom && !task.fixed && pkg >= 0;
+  const terms = [];
+  for (let k = fromI; k <= toI + 3; k++) {
+    const p = scheme.byIndex(k);
+    const owners = byMonth ? ctx.persons.map((x) => x.id) : [ownerOf(task, p, p.start, slot, ctx)];
+    owners.map((owner) => ({ p, k, owner, due: dueDay(task, p, ctx, owner) }))
+      .filter((x) => x.due !== null
+        && (!byMonth || packageOwners(ctx, Math.max(0, monthIndex(x.due) - rotationMonth(ctx)))[pkg] === x.owner))
+      .sort((a, b) => a.due - b.due)
+      .forEach((x, n) => terms.push({ ...x, key: n ? `${p.key}b` : p.key, counts: x.due >= start }));
+  }
+  return terms.map((x, n) => {
+    const next = terms[n + 1];
+    return { ...x, end: next && next.due - x.due <= 2 * len ? next.due - 1 : x.due + len - 1 };
+  }).filter((x) => x.k <= toI);
+}
+const rollingAround = (task, ctx, slot, today) => {
+  const i = periodScheme(task, toDay(ctx.setup)).indexAt(today);
+  return { i, terms: rollingTerms(task, ctx, slot, i - 2, i + 1) };
+};
+
+// Eigene Woche: vom ersten Putztag der Person an, 7 Tage. Liefert ['YYYY-MM-DD', 'YYYY-MM-DD'].
+export function personalWeek(days, todayStr) {
+  const first = days?.length ? Math.min(...days) : 5;
+  const t = toDay(todayStr);
+  const from = t - mod(weekday(t) - first, 7);
+  return [fromDay(from), fromDay(from + 6)];
+}
+
+// Drängt heute? Vergessenes immer; Wöchentliches und „alle 2 Wochen“ nur am Termin und am Tag danach.
+export const isPressing = (item, todayStr) => item.status === 'overdue'
+  || (item.status === 'due' && (!isRolling(item.task) || toDay(todayStr) <= toDay(item.due) + 1));
+
 // Wer ist heute für die laufende Periode zuständig?
 export function ownerNow(task, ctx, todayStr) {
   const today = toDay(todayStr);
   if (kindOf(task) === 'asneeded') return ownerOf(task, null, today, null, ctx);
+  if (isRolling(task)) {
+    const { terms } = rollingAround(task, ctx, null, today);
+    const now = terms.filter((x) => x.due <= today).pop() ?? terms.find((x) => x.due > today);
+    if (now) return now.owner;
+  }
   return ownerOf(task, periodsAround(task, ctx, today).cur, today, null, ctx);
 }
 
@@ -374,6 +424,10 @@ export function relevantKeys(tasks, ctx, todayStr) {
   const keys = new Set();
   for (const t of tasks) {
     if (kindOf(t) === 'asneeded') { keys.add(`need:${todayStr}`); continue; }
+    if (isRolling(t)) {
+      for (const slot of slotsOf(t, ctx)) for (const x of rollingAround(t, ctx, slot, today).terms) keys.add(x.key);
+      continue;
+    }
     const { cur, prev } = periodsAround(t, ctx, today);
     if (cur) keys.add(cur.key);
     keys.add(prev.key);
@@ -412,6 +466,7 @@ function evaluateNeed(task, ctx, todayStr, completions) {
  */
 export function evaluate(task, ctx, todayStr, completions) {
   if (kindOf(task) === 'asneeded') return evaluateNeed(task, ctx, todayStr, completions);
+  if (isRolling(task)) return evaluateRolling(task, ctx, todayStr, completions);
   const today = toDay(todayStr);
   const start = startOf(task, ctx);
   const daily = kindOf(task) === 'daily';
@@ -474,6 +529,57 @@ export function evaluate(task, ctx, todayStr, completions) {
   });
 }
 
+// Wöchentlich und alle 2 Wochen: wie evaluate, aber nach Terminen statt Kalenderperioden.
+// Vorziehen geht ab Beginn der Kalenderperiode des Termins, sobald der laufende Termin erledigt ist.
+function evaluateRolling(task, ctx, todayStr, completions) {
+  const today = toDay(todayStr);
+  const offseason = !inSeason(task.season, ymd(today)[1]);
+  return slotsOf(task, ctx).map((slot) => {
+    const { i, terms } = rollingAround(task, ctx, slot, today);
+    const list = terms.filter((x) => x.counts);
+    const past = list.filter((x) => x.due <= today);
+    const cur = past[past.length - 1];
+    const prv = past[past.length - 2];
+    const get = (x) => completions.get(completionId(task.id, x.key, slot));
+    const after = (day, owner) => {
+      for (let k = i - 2; k < i + 400; k++) {
+        const x = rollingTerms(task, ctx, slot, k, k).find((y) => y.counts && y.due > day && (owner === undefined || y.owner === owner));
+        if (x) return x;
+      }
+      return null;
+    };
+    const item = { task, slot, owner: null, status: 'idle', key: null, due: null, end: null, completion: null, next: null };
+    const set = (status, x, key, extra = {}) => Object.assign(item, {
+      status, key, owner: x.owner, due: fromDay(x.due), end: fromDay(x.end), ...extra,
+    });
+    const idle = () => {
+      const n = after(today);
+      Object.assign(item, { next: n ? fromDay(n.due) : null, owner: n ? n.owner : (task.assign === 'each' ? slot : null) });
+      return item;
+    };
+    const done = (x) => {
+      const n = after(x.due, x.owner); // nächster eigener Termin: nach dem Tausch kommt die andere Person zuerst
+      return set('done', x, x.key, { completion: get(x), next: n ? fromDay(n.due) : null });
+    };
+    if (offseason) {
+      item.status = 'offseason';
+      return idle();
+    }
+    const open = (x) => x && !paused(ctx, x.owner, x.due, x.end) && !get(x);
+    if (cur && !get(cur)) {
+      // voriger Termin verpasst: einmal überfällig, bei der Person, die ihn verpasst hat; Abhaken zählt für den laufenden
+      if (open(prv)) return set('overdue', prv, cur.key);
+      if (today <= cur.end) return set('due', cur, cur.key);
+      if (paused(ctx, cur.owner, cur.due, cur.end)) return idle();
+      return set('overdue', cur, cur.key);
+    }
+    // Heute Erledigtes bleibt heute „erledigt“ (zählt in der Statuskarte), erst danach lässt sich vorziehen
+    const nxt = cur && get(cur)?.day === todayStr ? null : after(today);
+    if (nxt && nxt.p.start <= today) return get(nxt) ? done(nxt) : set('upcoming', nxt, nxt.key);
+    return cur ? done(cur) : idle();
+  });
+}
+
 // ---------- Kalender ----------
 
 // Zeitfenster einer Aufgabe, die den Bereich [fromStr, toStr] berühren.
@@ -481,6 +587,12 @@ export function evaluate(task, ctx, todayStr, completions) {
 export function windowsBetween(task, ctx, fromStr, toStr) {
   if (kindOf(task) === 'asneeded') return [];
   const from = toDay(fromStr), to = toDay(toStr);
+  if (isRolling(task)) {
+    const scheme = periodScheme(task, toDay(ctx.setup));
+    return slotsOf(task, ctx).flatMap((slot) => rollingTerms(task, ctx, slot, scheme.indexAt(from) - 2, scheme.indexAt(to) + 1)
+      .filter((x) => x.counts && x.due <= to && x.end >= from)
+      .map((x) => ({ task, slot, owner: x.owner, key: x.key, start: fromDay(x.due), end: fromDay(x.end) })));
+  }
   const start = startOf(task, ctx);
   const slack = slackOf(task);
   const scheme = periodScheme(task, toDay(ctx.setup));

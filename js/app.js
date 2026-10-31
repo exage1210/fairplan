@@ -2,7 +2,7 @@ import {
   KINDS, PRESETS, kindOf, evaluate, inSeason, relevantKeys, completionId,
   localToday, toDay, fromDay, windowsBetween, awayDuring,
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, streaks,
-  packageOwners, rotationBase, swapCount, nextSwap, ownerNow,
+  packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED } from './template.js';
@@ -32,7 +32,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.34';
+const APP_VERSION = '2.0.35';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -499,10 +499,10 @@ function section(title, items, { lead, cls = '' } = {}) {
 const listOf = (items, opts) => (items.length ? `<div class="list">${items.map((i) => itemRow(i, opts)).join('')}</div>` : '');
 
 
-// Zahl am App-Icon: nicht Geschafftes + jetzt dran (eigenes und gemeinsames), ohne Tägliches
+// Zahl am App-Icon: nicht Geschafftes + was heute drängt (eigenes und gemeinsames), ohne Tägliches
 function badgeCount() {
   return allItems().filter((i) => (i.owner === S.me || i.owner === null) && !myPaused(i) && kindOf(i.task) !== 'daily'
-    && (i.status === 'overdue' || i.status === 'due')).length;
+    && isPressing(i, S.today)).length;
 }
 let lastBadge = -1;
 function updateBadge() {
@@ -536,11 +536,12 @@ const daysText = (n) => (n ? `${n} ${n === 1 ? 'Tag' : 'Tage'}` : 'Noch keine');
 // Eigene Aufgaben pausieren, solange man heute abwesend ist oder ihr Termin in die Abwesenheit fällt.
 // Andere sehen sie weiter und können vertreten.
 const myPaused = (i) => i.owner === S.me && i.due && i.end
-  && (isAway(S.me, S.today) || awayDuring(S.hh, S.me, toDay(i.due), toDay(i.end)));
+  && (isAway(S.me, S.today) || awayDuring(S.hh, S.me, toDay(i.due), toDay(isRolling(i.task) ? i.due : i.end)));
 
 function viewToday() {
   const items = allItems();
-  const sun = weekEnd(), mon = weekStart();
+  const sun = weekEnd();
+  const [myFrom, myTo] = personalWeek(person(S.me)?.days, S.today);
   const open = items.filter((i) => i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming');
   // Aufgaben: Vergessenes, jetzt Dranes und was diese Woche noch kommt (lässt sich schon vorher abhaken)
   const tasks = open.filter((i) => mineItem(i) && !myPaused(i) && (i.status !== 'upcoming' || i.due <= sun))
@@ -555,14 +556,16 @@ function viewToday() {
   const bonusToday = doneRules.filter((r) => ruleDone(r).by === S.me).length;
   const doneToday = items.filter((i) => i.status === 'done' && i.completion?.day === S.today).sort(byOwnerRhythm);
 
-  // Statuskarte: heute x/y; Balken = Woche Mo–So mit Vergessenem; Abmachungen nur als „extra“ daneben
+  // Statuskarte: heute x/y (nur was heute drängt); Balken = eigene Woche ab dem Putztag mit Vergessenem;
+  // Abmachungen nur als „extra“ daneben
+  const pressing = now.filter((i) => isPressing(i, S.today));
   const x = doneToday.filter((i) => i.completion.by === S.me && kindOf(i.task) !== 'asneeded').length;
-  const y = x + now.length;
-  const week = dueBetween(S.tasks, S.hh, mon, sun, doneMap(), S.me);
-  const forgotten = now.filter((i) => i.status === 'overdue' && i.due < mon).length;
+  const y = x + pressing.length;
+  const week = dueBetween(S.tasks, S.hh, myFrom, myTo, doneMap(), S.me);
+  const forgotten = now.filter((i) => i.status === 'overdue' && i.due < myFrom).length;
   const weekDone = week.filter((w) => w.done).length;
   const weekAll = week.length + forgotten;
-  const inWeek = myDays().filter((c) => c.day >= mon && c.day <= sun);
+  const inWeek = myDays().filter((c) => c.day >= myFrom && c.day <= myTo);
   const bonus = inWeek.filter((c) => c.rule).length;
   const weekCount = inWeek.length - bonus;
   const { current } = myStreaks();
@@ -582,7 +585,7 @@ function viewToday() {
         <span class="card-big">${x}<small> / ${y}</small></span></div>
       ${weekAll || bonus ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus ? `<span class="pill">+${bonus} extra</span>` : ''}</div>
         ${weekAll ? `<div class="bar"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div>` : ''}</div>` : ''}
-      <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : now.length ? `Noch ${now.length} offen` : 'Heute ist nichts dran.'}</span>
+      <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : pressing.length ? `Noch ${pressing.length} offen` : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.'}</span>
       ${next ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
       ${swap && toDay(swap) - toDay(S.today) <= 3 ? `<span class="card-next">Tausch am ${fmtDate(swap)}</span>` : ''}
       <hr>
