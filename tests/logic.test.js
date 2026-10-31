@@ -5,7 +5,7 @@ import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, inSeason, windowsBetween, awayDuring,
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, streaks,
-  personalWeek, isPressing,
+  personalWeek, isPressing, goalOf, goalStats, goalResult,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -570,4 +570,75 @@ test('Ganzer Monat: zählt die Termine auf den Putztagen im Monat', () => {
   assert.deepEqual(dec.map((w) => w.start), ['2026-12-06', '2026-12-13', '2026-12-20', '2026-12-27']);
   assert.deepEqual(dueBetween(tasks, moSo(), '2026-12-01', '2026-12-31', new Map(), 'p1').map((w) => w.start), []);
   assert.deepEqual(dueBetween(tasks, moSo(), '2027-01-01', '2027-01-31', new Map(), 'p1').map((w) => w.start), ['2027-01-04', '2027-01-11', '2027-01-18', '2027-01-25']);
+});
+
+// ---------- Gemeinsames Ziel ----------
+
+const doneAll = (tasks, c, month, skip = 0) => {
+  const m = new Map();
+  const [y, mo] = month.split('-').map(Number);
+  const to = `${month}-${new Date(Date.UTC(y, mo, 0)).getUTCDate()}`;
+  tasks.flatMap((t) => windowsBetween(t, c, `${month}-01`, to).filter((w) => w.start >= `${month}-01`))
+    .slice(skip).forEach((w) => m.set(completionId(w.task.id, w.key, w.slot), { by: 'p1' }));
+  return m;
+};
+
+test('Ziel: Standard 90 %, ohne Belohnung', () => {
+  assert.deepEqual(goalOf({}), { percent: 90, reward: '' });
+  assert.deepEqual(goalOf({ goal: { percent: 80, reward: 'Pizza-Abend' } }), { percent: 80, reward: 'Pizza-Abend' });
+});
+
+test('Ziel: zählt die Termine des ganzen Monats beider Personen, abgerundet', () => {
+  const tasks = [wk(), wk({ id: 'b', assign: 'B' }), wk({ id: 's', assign: 'shared' })];
+  const c = moSo({ sharedDays: [5] });
+  // Dezember: p2 So 6./13./20./27., p1 Mo 7./14./21./28., gemeinsam Sa 5./12./19./26.
+  assert.equal(goalStats(tasks, c, '2026-12', new Map()).total, 12);
+  assert.deepEqual(goalStats(tasks, c, '2026-12', new Map()).percent, 0);
+  const s = goalStats(tasks, c, '2026-12', doneAll(tasks, c, '2026-12', 1));
+  assert.deepEqual([s.done, s.total, s.percent], [11, 12, 91]);
+  assert.equal(s.lastEnd, '2027-01-03'); // Termin 27.12. läuft bis zum 4.1.
+});
+
+test('Ziel: Vertretung zählt, Tägliches und Bei Bedarf nicht, „pro Person“ doppelt', () => {
+  const c = moSo();
+  const m = new Map([[completionId('w', 'weekly:2026-11-30b', null), { by: 'p1', forPerson: 'p2' }]]);
+  assert.equal(goalStats([wk()], c, '2026-12', m).done, 1);
+  assert.equal(goalStats([wk({ n: 1, unit: 'day' })], c, '2026-12', new Map()).total, 0);
+  assert.equal(goalStats([wk({ n: 0, unit: 'need' })], c, '2026-12', new Map()).total, 0);
+  assert.equal(goalStats([wk({ assign: 'each' })], c, '2026-12', new Map()).total, 8);
+});
+
+test('Ziel: Abwesenheit fällt raus, außer es wurde trotzdem erledigt', () => {
+  const t = wk({ fixed: true }); // immer p1, Mo 7./14./21./28.
+  const c = moSo({ away: { p1: { from: '2026-12-14', to: '2026-12-16' } } });
+  const free = goalStats([t], c, '2026-12', new Map());
+  assert.equal(free.total, 3);
+  const m = new Map([[completionId('w', 'weekly:2026-12-14', null), { by: 'p1' }]]);
+  assert.deepEqual([goalStats([t], c, '2026-12', m).total, goalStats([t], c, '2026-12', m).done], [4, 1]);
+});
+
+test('Ziel: Ergebnis des Vormonats erst endgültig nach der letzten Frist', () => {
+  const tasks = [wk()];
+  const c = moSo();
+  const open = goalResult(tasks, c, '2027-01-01', new Map());
+  assert.deepEqual([open.month, open.reached, open.settled], ['2026-12', false, false]);
+  assert.equal(goalResult(tasks, c, '2027-01-03', new Map()).settled, false); // p2 So 27.12. läuft bis 3.1.
+  assert.equal(goalResult(tasks, c, '2027-01-04', new Map()).settled, true);
+  const all = goalResult(tasks, c, '2027-01-01', doneAll(tasks, c, '2026-12'));
+  assert.deepEqual([all.reached, all.settled], [true, false]); // schon erreicht, Frist läuft noch
+});
+
+test('Ziel: genau auf der Grenze zählt, knapp darunter nicht', () => {
+  const tasks = Array.from({ length: 5 }, (_, i) => wk({ id: `t${i}`, fixed: true })); // 4 Termine je Aufgabe = 20
+  const c = moSo({ goal: { percent: 90 } });
+  assert.equal(goalResult(tasks, c, '2027-01-20', doneAll(tasks, c, '2026-12', 2)).reached, true); // 18 von 20
+  assert.equal(goalResult(tasks, c, '2027-01-20', doneAll(tasks, c, '2026-12', 3)).reached, false); // 17 von 20
+});
+
+test('Ziel: Startmonat zählt nur mit mindestens 14 Tagen, keine Aufgaben = kein Ergebnis', () => {
+  assert.equal(goalResult([wk({ created: '2026-10-31' })], moSo({ setup: '2026-10-31' }), '2026-11-01', new Map()), null);
+  assert.equal(goalResult([wk({ created: '2026-10-19' })], moSo({ setup: '2026-10-19', rotateFrom: null }), '2026-11-01', new Map()), null); // 13 Tage
+  assert.equal(goalResult([wk({ created: '2026-10-18' })], moSo({ setup: '2026-10-18', rotateFrom: null }), '2026-11-01', new Map()).month, '2026-10'); // 14 Tage
+  assert.equal(goalResult([], moSo(), '2027-01-05', new Map()), null);
+  assert.equal(goalResult([wk()], moSo(), '2026-10-05', new Map()), null); // vor dem Start
 });
