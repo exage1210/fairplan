@@ -32,7 +32,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.33';
+const APP_VERSION = '2.0.34';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -638,7 +638,7 @@ function swapNote() {
   const weekly = mine.filter((t) => kindOf(t) === 'weekly').map((t) => esc(t.title));
   const rest = mine.length - weekly.length;
   const list = weekly.length ? `${weekly.join(', ')}${rest ? ` und ${rest} weitere` : ''}` : `${rest} Aufgaben`;
-  return `<button class="awaynote swapnote" data-action="swap-seen" style="--pc:var(--accent)">Getauscht! Du hast jetzt: ${list}</button>`;
+  return `<button class="awaynote swapnote" data-action="swap-seen" style="--pc:var(--accent)">Getauscht! Was schon läuft, machst du noch fertig. Danach hast du: ${list}</button>`;
 }
 
 function viewTasks() {
@@ -903,7 +903,7 @@ function viewMore() {
     <h2>Aufgaben</h2><div class="tile">
       ${goRow('aufgaben', 'list', 'Aufgabenliste', S.tasks.length)}
       ${goRow('abmachungen', 'star', 'Abmachungen', (hh.rules || []).length, 'a')}
-      ${switchLine('rotate', 'refresh', 'Monatlich tauschen', hh.rotateFrom ? `Nächster Tausch am ${fmtDate(nextSwap(hh, S.today))}` : 'Aufgaben bleiben fix bei einer Person', !!hh.rotateFrom)}
+      ${switchLine('rotate', 'refresh', 'Monatlich tauschen', hh.rotateFrom ? `Beim Ausschalten gehen die Listen zurück auf den Anfang. Nächster Tausch am ${fmtDate(nextSwap(hh, S.today))}` : 'Aufgaben bleiben fix bei einer Person', !!hh.rotateFrom)}
       <button class="mrow" data-action="reset-plan"><span class="ic">${icon('refresh', 18)}</span><span class="l">Plan neu einrichten</span><span class="chev">${icon('chevron', 16)}</span></button>
     </div>
     <h2>Dieses Gerät</h2><div class="tile">
@@ -1017,9 +1017,10 @@ function startSetup(reset = false) {
   S.setup = reset
     ? { step: 'persons', reset: true, persons: S.hh.persons.map((p) => ({ name: p.name, color: p.color, days: p.days?.length ? p.days : [5] })),
       shared: S.hh.sharedDays?.length ? S.hh.sharedDays : [5], start: S.today,
+      rotate: S.hh.rotateFrom !== null, // null = bewusst ausgeschaltet, fehlt = noch nie entschieden
       rules: (S.hh.rules || []).map((r) => RULE_RENAMED[r] || r).filter((r) => RULE_SUGGESTIONS.includes(r)), tasks: [], planRules: [], ...PICK_START, error: '' }
     : { step: 'start', persons: [{ name: '', color: 'violett', days: [5] }, { name: '', color: 'gruen', days: [5] }],
-      shared: [5], start: S.today, rules: [], tasks: [], planRules: [], ...PICK_START, error: '' };
+      shared: [5], start: S.today, rotate: true, rules: [], tasks: [], planRules: [], ...PICK_START, error: '' };
   renderSetup();
 }
 
@@ -1125,7 +1126,9 @@ function renderSetup() {
     body = `<h2>Aufteilung</h2>
       <div class="banner now">${names[0]} <strong>${hours(load.p1)} h</strong> · ${names[1]} <strong>${hours(load.p2)} h</strong> pro Monat</div>
       <p class="small">Automatisch fair verteilt: insgesamt möglichst gleich viel Zeit (Dauer × Häufigkeit), das Häufige zuerst. Antippen gibt eine Aufgabe der anderen Person – die Bilanz rechnet mit. Gemeinsames zählt je zur Hälfte. Zeiten kannst du später bei jeder Aufgabe ändern.</p>
-      <p class="small">Die beiden Listen tauschen jeden Monat (zum ersten Mal am ${fmtDate(nextSwap({ rotateFrom: rotationBase(st.start) }, st.start))}). Halbjährliches und Jährliches wechselt bei jedem Durchgang. Unter „Mehr“ kannst du das ausschalten.</p>
+      <div class="tile">${switchLine('setup-rotate', 'refresh', 'Monatlich tauschen', st.rotate
+        ? `Die beiden Listen tauschen jeden Monat, Halbjährliches und Jährliches bei jedem Durchgang. Erster Tausch am ${fmtDate(nextSwap({ rotateFrom: rotationBase(st.start) }, st.start))}`
+        : 'Aufgaben bleiben fix bei einer Person. Unter „Mehr“ kannst du das später ändern.', st.rotate)}</div>
       <h2><i class="sw" style="--pc:var(--c-${st.persons[0].color})"></i>${names[0]}</h2><div class="rows">${list('A')}</div>
       <h2><i class="sw" style="--pc:var(--c-${st.persons[1].color})"></i>${names[1]}</h2><div class="rows">${list('B')}</div>
       <p class="small">Dazu ${st.tasks.filter((t) => t.assign !== 'A' && t.assign !== 'B').length} gemeinsame, abwechselnde oder persönliche Aufgaben und ${setupRules(true).length} Abmachungen.</p>
@@ -1169,7 +1172,7 @@ async function createHousehold(withTemplate) {
   const doc = {
     ...DEFAULT_HOUSEHOLD,
     setup: st.start,
-    rotateFrom: rotationBase(st.start),
+    rotateFrom: st.rotate ? rotationBase(st.start) : null,
     sharedDays: st.shared,
     persons: setupPersons(),
     rules: setupRules(withTemplate),
@@ -1199,7 +1202,7 @@ function resetPlan(withTemplate) {
   const persons = S.hh.persons.map((p, i) => ({ ...p, ...setupPersons()[i], id: p.id }));
   for (const t of S.tasks) S.store.deleteTask(S.code, t.id);
   for (const t of setupTasks(withTemplate)) S.store.saveTask(S.code, t);
-  updateHH({ persons, sharedDays: st.shared, rules: [...setupRules(withTemplate), ...ownRules().filter((r) => !RULE_RENAMED[r])], setup: st.start, rotateFrom: rotationBase(st.start), swapped: false });
+  updateHH({ persons, sharedDays: st.shared, rules: [...setupRules(withTemplate), ...ownRules().filter((r) => !RULE_RENAMED[r])], setup: st.start, rotateFrom: st.rotate ? rotationBase(st.start) : null, swapped: false });
   S.setup = null;
   S.view = 'heute';
   S.stack = [];
@@ -1658,6 +1661,7 @@ app.addEventListener('change', (e) => {
   if (d.action === 'toggle') return toggle(el);
   if (d.action === 'toggle-rule') return toggleRule(el);
   if (d.action === 'toggle-step') return toggleStep(el);
+  if (d.switch === 'setup-rotate') { S.setup.rotate = el.checked; return renderSetup(); }
   if (d.switch === 'rotate') return updateHH({ rotateFrom: el.checked ? rotationBase(S.today) : null });
   if (d.switch === 'vibrate') { ls.set('vibrate', el.checked ? null : '0'); if (el.checked) haptic(); return; }
   if (d.switch === 'badge') {
