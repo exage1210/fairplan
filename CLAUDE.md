@@ -100,7 +100,14 @@ Gilt vor älteren Einträgen oben, wo sie sich widersprechen (Spielraum, Tauscht
 - `goalResult` (Vormonat): `reached` = Quote erreicht, `settled` = letzte Frist vorbei (Termine laufen bis in den neuen Monat). Hinweis einmal pro Monat und Gerät (`fairplan.goal-seen`): „Geschafft! …“ sobald erreicht, „Neuer Monat, neues Ziel.“ erst nach der letzten Frist. Startmonat zählt nur mit mindestens 14 Tagen.
 - `goalHits` im Haushalt `{ 'YYYY-MM': Belohnung }` hält Erreichtes fest, auch nach „Plan neu einrichten“. Meilenstein „Gemeinsames Ziel“ liest das.
 - Beim Einrichten zeichnet das Textfeld nicht neu (`input` statt `change`), sonst ginge der Tipp auf „Haushalt anlegen“ beim Verlassen des Felds verloren.
-- Noch offen laut Vault: Runde 2 Joker (30 statt 10 Abmachungen, Entscheidung Daniel), Runde 3 Statistik und Stern.
+- Noch offen laut Vault: Runde 3 Statistik und Stern.
+
+## Joker (31.10.2026, v38; Runde 2)
+- `joker_<personId>` im Haushalt `{ progress, count, earned, deferred: { <completionId des Termins>: Tag } }`, jede Person schreibt nur ihr Feld. 30 eigene Abmachungen = 1 Joker (`JOKER_PRICE`), höchstens 3 (`JOKER_MAX`), bei vollem Vorrat zählt nichts weiter. Frühere Abmachungen zählen nicht. Abmachung zurücknehmen rechnet zurück (`countRule`).
+- Einsetzen (`canJoker`, `useJoker`, `playJoker`): eigene offene oder rote Aufgabe mit Person, nicht Tägliches und Bei Bedarf. Frist +7 Tage. Knopf in `nowRow` erst, wenn die Frist in höchstens 2 Tagen endet oder die Aufgabe rot ist. Rückgängig über den Hinweis.
+- `item.termKey` = Termin, `item.key` = wohin der Haken zählt. Wöchentlich läuft die neue Runde schon: Der Eintrag bleibt beim Termin mit Joker (auch über den Tausch bei derselben Person), ein Haken zählt für die laufende Runde.
+- Ziel und Balken: Verschobenes fällt raus, bis es erledigt ist; erledigt zählt es im Monat der neuen Frist. Drängt nicht (`isPressing`). Aktuell und Plan zeigen „verschoben“.
+- `earned` ist für den Meilenstein „Erster Joker“ in Runde 3.
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.

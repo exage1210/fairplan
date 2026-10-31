@@ -144,7 +144,7 @@ h1.logo { font-size: 28px; font-weight: 700; letter-spacing: -0.6px; line-height
 .card-label { display: block; font-size: 13px; font-weight: 500; color: var(--fg-2); }
 .card-big { font-size: 32px; font-weight: 700; letter-spacing: -1px; line-height: 1.2; }
 .card-big small { font-size: 17px; font-weight: 600; letter-spacing: 0; color: var(--fg-2); }
-.bar-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-2); margin-bottom: 6px; }
+.bar-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 8px; font-size: 13px; color: var(--fg-2); margin-bottom: 6px; }
 .bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.3s; }
 .bar.thin { height: 6px; }
@@ -543,3 +543,4 @@ details.more[open] > summary::after { content: " ▾"; }
 
 /* Hinweis nach dem Tausch */
 .swapnote { display: block; width: 100%; margin-top: 18px; border: 0; color: var(--fg); text-align: left; cursor: pointer; }
+.jokerbtn { display: block; margin-top: 6px; padding: 4px 10px; border: 0; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600; background: var(--accent-soft); color: var(--accent-text); cursor: pointer; }
