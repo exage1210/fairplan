@@ -461,6 +461,9 @@ export function personalWeek(days, todayStr) {
 export const isPressing = (item, todayStr) => item.status === 'overdue'
   || (item.status === 'due' && !item.deferred && (!isRolling(item.task) || toDay(todayStr) <= toDay(item.due) + 1));
 
+// Reihenfolge auf „Aktuell“: Vergessenes, was heute drängt, was noch Zeit hat, was erst kommt
+export const urgency = (item, todayStr) => (item.status === 'overdue' ? 0 : item.status === 'upcoming' ? 3 : isPressing(item, todayStr) ? 1 : 2);
+
 // Wer ist heute für die laufende Periode zuständig?
 export function ownerNow(task, ctx, todayStr) {
   const today = toDay(todayStr);

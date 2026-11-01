@@ -4,8 +4,8 @@ import {
   monthlyMinutes, loadByPerson, autoSplit, spreadPositions, weeksPerPeriod, holidays, isoWeek, dueBetween, weekStreaks,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
   PACKAGES, MAX_PERSONS, isPackage, swapsByRound, upsertHome,
-  goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE,
-  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull, PALETTE, colorName, colorLabel,
+  goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX,
+  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull, PALETTE, colorName, colorLabel, urgency,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED, GOAL_REWARDS } from './template.js';
@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.46';
+const APP_VERSION = '2.0.47';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -53,6 +53,8 @@ const ICON_PATHS = {
   qr: 'M4.5 3h4A1.5 1.5 0 0 1 10 4.5v4A1.5 1.5 0 0 1 8.5 10h-4A1.5 1.5 0 0 1 3 8.5v-4A1.5 1.5 0 0 1 4.5 3zM15.5 3h4A1.5 1.5 0 0 1 21 4.5v4a1.5 1.5 0 0 1-1.5 1.5h-4A1.5 1.5 0 0 1 14 8.5v-4A1.5 1.5 0 0 1 15.5 3zM4.5 14h4a1.5 1.5 0 0 1 1.5 1.5v4A1.5 1.5 0 0 1 8.5 21h-4A1.5 1.5 0 0 1 3 19.5v-4A1.5 1.5 0 0 1 4.5 14zM14 14h3v3M21 14v.01M14 21h3M21 17v4',
   db: 'M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
   flag: 'M5 21V4M5 4h11l-2 4 2 4H5',
+  swap: 'M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4',
+  target: 'M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0zM16 12a4 4 0 1 1-8 0a4 4 0 1 1 8 0z',
   camera: 'M4 8h3l2-3h6l2 3h3v11H4zM15.5 13a3.5 3.5 0 1 1-7 0a3.5 3.5 0 1 1 7 0z',
 };
 const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON_PATHS[name]}"></path></svg>`;
@@ -119,7 +121,6 @@ const S = {
   me: ls.get('me'),
   view: 'heute',
   filter: 'all',
-  kindFilter: 'all',
   stack: [], // Unterseiten: woher man gekommen ist
   planMode: 'week',
   planDate: null, // Datum im sichtbaren Plan-Zeitraum, null = heute
@@ -362,7 +363,7 @@ const MAIN = { heute: () => viewToday(), plan: () => viewPlan(), statistik: () =
 const PAGES = {
   profil: ['Profil', () => viewProfile()],
   haushalt: ['Personen', () => viewHousehold()],
-  ziel: ['Gemeinsames Ziel', () => goalBlock(goalOf(S.hh))],
+  ziel: ['Gemeinsames Ziel', () => `<h2>Monatsziel</h2>${goalBlock(goalOf(S.hh))}`],
   haushalte: ['Meine Haushalte', () => viewHomes()],
   code: ['Person einladen', () => viewCode()],
   aufgaben: ['Aufgabenliste', () => viewTasks()],
@@ -461,7 +462,7 @@ function nowRow(it, sub = '', ahead = false, plain = false) {
   const by = it.completion?.by;
   const locked = done && by !== S.me;
   const off = !it.key; // nächster Termin liegt in einer späteren Periode → noch nicht abhakbar
-  const extra = plain ? '' : [it.owner === null && !done ? 'Gemeinsam' : '', t.note ? esc(t.note) : '', sub].filter(Boolean).join(' · ');
+  const extra = plain ? '' : [it.owner === null && !done ? 'Gemeinsam' : '', sub, t.note ? esc(t.note) : ''].filter(Boolean).join(' · ');
   // Joker erst anbieten, wenn es knapp wird: sonst stünde der Knopf bei jeder Aufgabe
   const joker = it.owner === S.me && canJoker(it, S.today) && jokerOf(S.hh, S.me).count > 0 && toDay(it.end) - toDay(S.today) <= 2
     ? `<button class="jokerbtn" data-action="joker" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}">Joker: 1 Woche später</button>` : '';
@@ -494,18 +495,16 @@ function ruleRow(text) {
     done: !!c, locked, off: false, by: c?.by,
     check: `<input type="checkbox" data-action="toggle-rule" data-rule="${esc(text)}" ${c ? 'checked' : ''} ${locked ? 'disabled' : ''}
       aria-label="${esc(text)} erledigt">`,
-    body: `<div class="body"><div class="head"><span class="title">${esc(text)}</span><span class="kind">täglich</span></div>
+    body: `<div class="body"><div class="head"><span class="title">${esc(text)}</span></div>
       ${c ? `<div class="meta">erledigt von ${byWho(c.by)} · ${timeOf(c)}</div>` : ''}</div>`,
   });
 }
 
+const head = (name, n, cls = '') => `${name} <span class="count ${cls}">${n}</span>`;
+
 // Aufklappbarer Bereich; Zustand bleibt beim Neuzeichnen erhalten
 function fold(key, summary, body, openByDefault = false) {
   return `<details class="fold" data-fold="${key}" ${S.open[key] ?? openByDefault ? 'open' : ''}><summary>${summary}</summary>${body}</details>`;
-}
-
-function section(title, items, { lead, cls = '' } = {}) {
-  return `<section class="group ${cls}"><h2>${esc(title)}<span class="count">${items.length}</span></h2>${listOf(items, { lead })}</section>`;
 }
 
 const listOf = (items, opts) => (items.length ? `<div class="list">${items.map((i) => itemRow(i, opts)).join('')}</div>` : '');
@@ -567,6 +566,8 @@ const seriesText = (n) => {
 const myPaused = (i) => i.owner === S.me && i.due && i.end
   && (isAway(S.me, S.today) || awayDuring(S.hh, S.me, toDay(i.due), toDay(isRolling(i.task) ? i.due : i.end)));
 
+const byUrgency = (a, b) => urgency(a, S.today) - urgency(b, S.today) || byOwnerRhythm(a, b);
+
 function viewToday() {
   const items = allItems();
   const sun = weekEnd();
@@ -574,7 +575,7 @@ function viewToday() {
   const open = items.filter((i) => i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming');
   // Aufgaben: Vergessenes, jetzt Dranes und was diese Woche noch kommt (lässt sich schon vorher abhaken)
   const tasks = open.filter((i) => mineItem(i) && !myPaused(i) && (i.status !== 'upcoming' || i.due <= sun))
-    .sort((a, b) => (a.status === 'upcoming' ? 1 : 0) - (b.status === 'upcoming' ? 1 : 0) || byOwnerRhythm(a, b));
+    .sort(byUrgency);
   const now = tasks.filter((i) => i.status !== 'upcoming');
   const need = items.filter((i) => mineItem(i) && i.status === 'need').sort(byOwnerRhythm);
 
@@ -585,63 +586,41 @@ function viewToday() {
   const bonusToday = doneRules.filter((r) => ruleDone(r).by === S.me).length;
   const doneToday = items.filter((i) => i.status === 'done' && i.completion?.day === S.today).sort(byOwnerRhythm);
 
-  // Statuskarte: heute x/y (nur was heute drängt); Balken = eigene Woche ab dem Putztag mit Vergessenem;
-  // Abmachungen nur als „extra“ daneben
+  // Statuskarte beantwortet nur: Was ist jetzt zu tun? Balken = eigene Woche ab dem Putztag mit Vergessenem.
+  // Serie, Ziel und Joker stehen in der Statistik.
   const pressing = now.filter((i) => isPressing(i, S.today));
-  const x = doneToday.filter((i) => i.completion.by === S.me && kindOf(i.task) !== 'asneeded').length;
-  const y = x + pressing.length;
   const week = dueBetween(S.tasks, S.hh, myFrom, myTo, doneMap(), S.me);
   const forgotten = now.filter((i) => i.status === 'overdue' && i.due < myFrom).length;
   const weekDone = week.filter((w) => w.done).length;
   const weekAll = week.length + forgotten;
-  const inWeek = myDays().filter((c) => c.day >= myFrom && c.day <= myTo);
-  const bonus = inWeek.filter((c) => c.rule).length;
-  const weekCount = inWeek.length - bonus;
   syncStats();
-  const { current } = mySeries();
-  const streakText = seriesText(current);
 
-  const next = items.filter((i) => mineItem(i) && !['daily', 'asneeded'].includes(kindOf(i.task)))
-    .map((i) => ({ title: i.task.title, date: i.status === 'upcoming' ? i.due : i.next }))
-    .filter((n) => n.date && n.date > S.today).sort((a, b) => a.date.localeCompare(b.date))[0];
   const away = S.hh.away?.[S.me];
   const meAway = away?.from && away.from <= S.today && S.today <= away.to;
-  const allDone = !now.length && x > 0;
-  // Ruhige Karte: nichts Fälliges offen, aber es gibt eigene Aufgaben und der Plan läuft
+  // Alles erledigt: nichts Fälliges offen, aber es gibt eigene Aufgaben und der Plan läuft
   const calm = !now.length && !meAway && S.today >= S.hh.setup && items.some((i) => mineItem(i) && kindOf(i.task) !== 'asneeded');
   const ahead = calm ? nextRounds(S.tasks, S.hh, S.me, S.today, doneMap()) : [];
   const aheadIds = new Set(ahead.map((i) => completionId(i.task.id, i.key, i.slot)));
   const inAhead = (i) => i.key && aheadIds.has(completionId(i.task.id, i.key, i.slot));
   const me = person(S.me);
   const swap = nextSwap(S.hh, S.today);
-  const goal = goalOf(S.hh);
-  const goalNow = goalStats(S.tasks, S.hh, S.today.slice(0, 7), doneMap());
-  const myJoker = jokerOf(S.hh, S.me);
-  const jokerLabel = myJoker.count ? `${myJoker.count} Joker` : rules.length ? `noch ${JOKER_PRICE - myJoker.progress} bis Joker` : '';
 
-  const card = `${movedNote()}${goalNote()}${swapNote()}<section class="card ${allDone ? 'alldone' : ''}">
-      <div><span class="card-label">Deine Aufgaben heute</span>
-        <span class="card-big">${x}<small> / ${y}</small></span></div>
-      ${weekAll || bonus || jokerLabel ? `<div><div class="bar-head"><span>${weekAll ? `Diese Woche ${weekDone} von ${weekAll}` : 'Diese Woche nichts geplant'}</span>${bonus || jokerLabel ? `<span class="pill">${[bonus ? `+${bonus} extra` : '', jokerLabel].filter(Boolean).join(' · ')}</span>` : ''}</div>
-        ${weekAll ? `<div class="bar"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div>` : ''}</div>` : ''}
-      <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : pressing.length ? `Noch ${pressing.length} offen` : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.'}</span>
+  const headline = meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.`
+    : calm ? 'Alles erledigt' : pressing.length ? `Noch ${pressing.length} offen`
+      : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.';
+  const card = `${movedNote()}${goalNote()}${swapNote()}<section class="card status">
+      <div class="status-head">${calm ? starSvg(`var(--c-${me.color})`, !S.cheered) : ''}<div><b>${headline}</b>${calm ? '<span>Genieß den Tag.</span>' : ''}</div></div>
+      ${weekAll ? `<div><div class="bar-head"><span>Diese Woche ${weekDone} von ${weekAll}</span></div><div class="bar thin"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div></div>` : ''}
       ${S.today < S.hh.setup ? `<span class="card-next">Euer Plan startet am ${fmtDate(S.hh.setup, true)}</span>` : ''}
-      ${goalNow.total ? `<span class="card-next">Gemeinsam: ${goalNow.percent} % von ${goal.percent} %${goal.reward ? ` · ${esc(goal.reward)}` : ''}</span>` : ''}
-      ${next && !ahead.length ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
       ${swap && toDay(swap) - toDay(S.today) <= 3 ? `<span class="card-next">Tausch am ${fmtDate(swap)}</span>` : ''}
-      <hr>
-      <div class="duo"><div><span>Deine Woche</span><b>${weekCount} erledigt</b></div>
-        <div><span>Serie</span><b>${current ? `${streakText} in Folge` : streakText}</b></div></div>
     </section>`;
-  const cheer = `${calm ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${starSvg(`var(--c-${me.color})`, !S.cheered)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
   if (S.compsReady) S.cheered = calm; // Stern nur zeichnen, wenn gerade alles erledigt wurde, nicht beim Öffnen oder Neuzeichnen
 
   const rows = (list, sub = whenText) => `<div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div>`;
-  const head = (name, n, cls = '') => `${name} <span class="count ${cls}">${n}</span>`;
 
   // Andere Personen: eingeklappt, abhaken = Vertretung
   const others = S.hh.persons.filter((p) => p.id !== S.me).map((p) => {
-    const list = open.filter((i) => i.owner === p.id && i.status !== 'upcoming').sort(byOwnerRhythm);
+    const list = open.filter((i) => i.owner === p.id && i.status !== 'upcoming').sort(byUrgency);
     return list.length ? fold(`other-${p.id}`, head(esc(p.name), list.length), rows(list)) : '';
   }).join('');
 
@@ -658,10 +637,9 @@ function viewToday() {
     : `<details class="fold" data-fold="ahead-empty"><summary>${head('Als Nächstes', 0)}</summary><p class="small">In den nächsten 7 Tagen steht nichts an.</p></details>`;
 
   return `${card}
-    ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} extra</span>` : ''}`, `<p class="small">Erledigt ihr nebenbei, so wie abgemacht. Wird nicht aufgeteilt, zählt aber in deiner Statistik.</p><div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
-    ${cheer}
+    ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} extra</span>` : ''}`, `<div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
     ${aheadBlock}
-    ${list.length || !calm ? fold('tasks', head('Aufgaben', list.length), rows(list), true) : ''}
+    ${list.length ? `<h2 class="main">${head('Aufgaben', list.length)}</h2>${rows(list)}` : ''}
     ${others}
     ${need.length ? fold('need', `<span class="needhead">Bei Bedarf (${need.length})<small>Ohne festen Termin – abhaken, wenn du es gemacht hast</small></span>`, `<div class="list">${need.map((i) => nowRow(i, '', false, true)).join('')}</div>`) : ''}
     ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.filter((i) => !inAhead(i)).length), `<div class="list">${doneRows}</div>`) : ''}`;
@@ -675,11 +653,6 @@ function filterBar() {
   const f = S.filter;
   return [['all', 'Alle'], ...S.hh.persons.map((p) => [p.id, p.name]), ['shared', 'Gemeinsam']]
     .map(([v, l]) => `<button data-filter="${esc(v)}" aria-pressed="${f === v}">${esc(l)}</button>`).join('');
-}
-
-function kindBar() {
-  return [['all', 'Alle Intervalle'], ...KINDS.filter((k) => S.tasks.some((t) => kindOf(t) === k)).map((k) => [k, KIND_LABEL[k]])]
-    .map(([v, l]) => `<button data-kind-filter="${v}" aria-pressed="${S.kindFilter === v}">${esc(l)}</button>`).join('');
 }
 
 // Hinweis nach dem Tausch: einmal pro Monat und Gerät, zum Wegtippen
@@ -722,16 +695,16 @@ function swapNote() {
 }
 
 function viewTasks() {
-  const f = S.filter, kf = S.kindFilter;
-  const items = allItems().filter((i) => (f === 'all' || (f === 'shared' ? i.owner === null : i.owner === f))
-    && (kf === 'all' || kindOf(i.task) === kf));
-  const groups = KINDS.map((k) => {
-    const g = sortItems(items.filter((i) => kindOf(i.task) === k));
-    return g.length ? section(KIND_LABEL[k], g, { lead: 'owner' }) : '';
-  }).join('');
+  const f = S.filter;
+  const items = allItems().filter((i) => f === 'all' || (f === 'shared' ? i.owner === null : i.owner === f));
+  // Rhythmen aufklappbar: offen ist Wöchentliches, gibt es das nicht, der erste Rhythmus
+  const kinds = KINDS.filter((k) => items.some((i) => kindOf(i.task) === k));
+  const first = kinds.includes('weekly') ? 'weekly' : kinds[0];
+  const groups = kinds.map((k) => fold(`list-${k}`, head(KIND_LABEL[k], items.filter((i) => kindOf(i.task) === k).length),
+    listOf(sortItems(items.filter((i) => kindOf(i.task) === k)), { lead: 'owner' }), k === first)).join('');
   const load = loadByPerson(S.tasks, S.hh)[S.me] || 0;
   return `<div class="btnrow" style="margin-top:18px"><button class="btn primary block" data-edit="">${icon('plus', 18)}Aufgabe hinzufügen</button></div>
-    <div class="filters">${filterBar()}</div><div class="filters">${kindBar()}</div>
+    <div class="filters">${filterBar()}</div>
     <p class="small">Dein Aufwand pro Monat: ${hours(load)} h</p>
     ${groups || '<p class="none" style="margin-top:24px">Keine Aufgaben.</p>'}`;
 }
@@ -759,7 +732,7 @@ const compRhythm = (c) => {
 function viewPlan() {
   const [from, to] = planRange();
   const isWeek = S.planMode === 'week';
-  const sel = S.calDay || S.today;
+  const sel = S.calDay; // Vorschau, bis ein Tag angetippt wird
   const doneOn = new Map();
   for (const c of S.dayComps) { if (!doneOn.has(c.day)) doneOn.set(c.day, []); doneOn.get(c.day).push(c); }
   const hol = new Map([...holidays(+from.slice(0, 4)), ...holidays(+to.slice(0, 4))]);
@@ -797,8 +770,8 @@ function viewPlan() {
     <div class="calhead"><button class="navbtn" data-plan-nav="-1" aria-label="Zurück">${icon('back', 20)}</button><strong>${title}</strong><button class="navbtn" data-plan-nav="1" aria-label="Weiter">${icon('chevron', 20)}</button></div>
     ${isWeek ? '' : `<div class="cal-grid">${WEEKDAYS.map((w) => `<span class="wd">${w}</span>`).join('')}</div>`}
     <div class="cal-grid ${isWeek ? 'week' : ''}">${cells.join('')}</div>
-    ${dayDetail(sel, doneOn, hol.get(sel))}
-    ${nextTwoWeeks()}`;
+    ${sel ? dayDetail(sel, doneOn, hol.get(sel)) : ''}
+    ${nextTwoWeeks(!isWeek)}`;
 }
 
 // Im Plan: eigene zuerst, dann gemeinsame, dann die der anderen; innerhalb nach Rhythmus
@@ -841,7 +814,7 @@ function dayDetail(sel, doneOn, holiday) {
 }
 
 // Nächste 2 Wochen: kommende Aufgaben ohne Tägliches, Abwesenheiten in Personenfarbe
-function nextTwoWeeks() {
+function nextTwoWeeks(folded) {
   const first = toDay(S.today) + 1, last = first + 13;
   const byId = doneMap();
   const days = new Map();
@@ -857,7 +830,9 @@ function nextTwoWeeks() {
     .sort(byMeFirst);
   for (const w of wins) add(w.deferred ? w.end : w.start, `<li><i style="--pc:${dotOf(w.owner)}"></i><span>${esc(w.task.title)}${w.deferred ? ' · verschoben' : ''}</span></li>`);
   const rows = [...days.keys()].sort().map((ds) => `<div class="urow"><div class="d"><small>${WEEKDAYS[weekdayOf(ds)]}</small><b>${fmtDate(ds, false)}</b></div><ul>${days.get(ds).join('')}</ul></div>`).join('');
-  return `<h2>Nächste 2 Wochen</h2>${rows ? `<div class="tile pad">${rows}</div><span class="hint">Ohne tägliche Aufgaben.</span>` : '<p class="none">Nichts geplant.</p>'}`;
+  const legend = [...S.hh.persons.map((p) => `<span><i class="sw" style="--pc:var(--d-${p.color})"></i>${esc(p.name)}</span>`), '<span><i class="sw" style="--pc:var(--shared)"></i>Gemeinsam</span>'].join('');
+  const body = rows ? `<div class="tile pad">${rows}</div><span class="hint legend">${legend}</span><span class="hint">Ohne tägliche Aufgaben.</span>` : '<p class="none">Nichts geplant.</p>';
+  return folded ? fold('next2', 'Nächste 2 Wochen', body) : `<h2>Nächste 2 Wochen</h2>${body}`;
 }
 
 // ---------- Statistik (nur eigene Zahlen) ----------
@@ -918,14 +893,14 @@ const milestones = whenChanged(() => {
   const goals = Object.keys(S.hh.goalHits || {}).length;
   const left = (n, goal) => `noch ${Math.max(0, goal - n)}`;
   const list = [
-    ['first', 'Erster Haken', tasks.length >= 1, 'läuft', MILESTONES.check],
-    ['week', 'Erste Woche geschafft', best >= 1, 'läuft', MILESTONES.cal],
+    ['first', 'Erster Haken', tasks.length >= 1, 'noch offen', MILESTONES.check],
+    ['week', 'Erste Woche geschafft', best >= 1, 'noch offen', MILESTONES.cal],
     ['week4', '4 Wochen Serie', best >= 4, left(best, 4), MILESTONES.flame],
-    ['month', 'Ganzer Monat', whole, 'läuft', MILESTONES.cal],
+    ['month', 'Ganzer Monat', whole, 'noch offen', MILESTONES.cal],
     ['tasks100', '100 Aufgaben', tasks.length >= 100, left(tasks.length, 100), MILESTONES.cup],
     ['extra100', '100 extra', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
     ['joker', 'Erster Joker', joker.earned >= 1, `noch ${JOKER_PRICE - joker.progress}`, MILESTONES.joker],
-    ['goal', 'Gemein\u00ADsames Ziel', goals >= 1, 'läuft', MILESTONES.star],
+    ['goal', 'Gemein\u00ADsames Ziel', goals >= 1, 'noch offen', MILESTONES.star],
   ].map(([id, name, on, open, path]) => ({ id, name, on: on || !!st.done[id], sub: id === 'goal' && goals ? `${goals}× geschafft` : on || st.done[id] ? 'geschafft' : open, path }));
   return { list, best, current, tasks };
 });
@@ -1042,6 +1017,9 @@ function viewStats() {
   // Meilensteine: erreicht in Personenfarbe, offen grau
   const badges = list.map((m) => `<div class="badge ${m.on ? 'on' : ''}"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${m.path}"></path></svg></i><b>${m.name}</b><small>${m.sub}</small></div>`).join('');
 
+  const goal = goalOf(S.hh);
+  const goalNow = goalStats(S.tasks, S.hh, S.today.slice(0, 7), byId);
+  const joker = jokerOf(S.hh, S.me);
   const seg = [['week', 'Woche'], ['month', 'Monat'], ['year', 'Jahr']].map(([v, l]) => `<button data-stat-mode="${v}" aria-pressed="${S.statMode === v}">${l}</button>`).join('');
   return `<div class="seg">${seg}</div>
     <section class="card">
@@ -1050,7 +1028,11 @@ function viewStats() {
       <span class="card-open">${trend}</span>
     </section>
     <div class="tiles2"><div class="stat"><span>Aktuelle Serie</span><b class="a">${seriesText(current)}</b></div><div class="stat"><span>Längste Serie</span><b>${seriesText(best)}</b></div></div>
-    ${rhythm ? `<h2>Nach Rhythmus</h2><div class="tile pad">${rhythm}</div>` : ''}
+    ${goalNow.total || (S.hh.rules || []).length ? `<h2>Ziel und Joker</h2><div class="tile pad">
+      ${goalNow.total ? `<div class="rrow"><div><b>Gemeinsam${goal.reward ? ` · ${esc(goal.reward)}` : ''}</b><span>${goalNow.percent} % von ${goal.percent} %</span></div><div class="bar thin"><i style="width:${Math.min(100, goalNow.percent)}%"></i></div></div>` : ''}
+      ${(S.hh.rules || []).length ? `<div class="rrow"><div><b>${joker.count ? `${joker.count} Joker` : 'Joker'}</b><span>${joker.count >= JOKER_MAX ? 'Vorrat voll' : `noch ${JOKER_PRICE - joker.progress} Abmachungen`}</span></div><div class="bar thin"><i style="width:${joker.count >= JOKER_MAX ? 100 : Math.max(0, Math.round((joker.progress / JOKER_PRICE) * 100))}%"></i></div></div>` : ''}
+    </div>` : ''}
+    ${rhythm ? fold('rhythm', 'Nach Rhythmus', `<div class="tile pad">${rhythm}</div>`) : ''}
     <h2>Meilensteine</h2><div class="badges">${badges}</div>`;
 }
 
@@ -1076,7 +1058,7 @@ function viewMore() {
   return `<button class="ptile" data-go="profil">${avatar(me, 'l')}<span>${esc(me.name)}</span><span class="chev">${icon('chevron', 18)}</span></button>
     <h2>Wir</h2><div class="tile">
       ${goRow('haushalt', 'users', 'Personen', hh.persons.length)}
-      ${goRow('ziel', 'flag', 'Gemeinsames Ziel', `${goalOf(hh).percent} %`)}
+      ${goRow('ziel', 'target', 'Gemeinsames Ziel', `${goalOf(hh).percent} %`)}
       ${homes().length > 1 ? goRow('haushalte', 'list', 'Meine Haushalte', homes().length) : ''}
       ${goRow('putztag', 'plan', putztagWord(hh.sharedDays, 'Gemeinsamer Putztag', 'Gemeinsame Putztage'), shared)}
       ${goRow('abwesenheit', 'away', 'Abwesenheit', awayNames || 'Keine')}
@@ -1084,8 +1066,7 @@ function viewMore() {
     <h2>Aufgaben</h2><div class="tile">
       ${goRow('aufgaben', 'list', 'Aufgabenliste', S.tasks.length)}
       ${goRow('abmachungen', 'star', 'Abmachungen', (hh.rules || []).length, 'a')}
-      ${switchLine('rotate', 'refresh', 'Monatlich tauschen', hh.rotateFrom ? `Beim Ausschalten gehen die Listen zurück auf den Anfang. Nächster Tausch am ${fmtDate(nextSwap(hh, S.today))}` : 'Aufgaben bleiben fix bei einer Person', !!hh.rotateFrom)}
-      <button class="mrow" data-action="reset-plan"><span class="ic">${icon('refresh', 18)}</span><span class="l">Plan neu einrichten</span><span class="chev">${icon('chevron', 16)}</span></button>
+      ${switchLine('rotate', 'swap', 'Monatlich tauschen', hh.rotateFrom ? `Nächster Tausch am ${fmtDate(nextSwap(hh, S.today))}` : 'Aufgaben bleiben fix bei einer Person', !!hh.rotateFrom)}
     </div>
     <h2>Dieses Gerät</h2><div class="tile">
       ${badgeRow()}
@@ -1094,6 +1075,7 @@ function viewMore() {
     </div>
     <h2>Verwaltung</h2><div class="tile">
       ${goRow('backup', 'db', 'Backup', 'Export · Import')}
+      <button class="mrow" data-action="reset-plan"><span class="ic">${icon('refresh', 18)}</span><span class="l">Plan neu einrichten</span><span class="chev">${icon('chevron', 16)}</span></button>
       ${goRow('start', 'flag', 'Start des Plans', fmtDate(hh.setup, true))}
     </div>
     <button class="logout" data-action="leave">Auf diesem Gerät abmelden</button>
@@ -1202,12 +1184,12 @@ function movedNote() {
     <div class="btnrow"><button class="btn" data-action="move-stay">Hier bleiben</button><button class="btn primary" data-action="move-go">Wechseln</button></div></section>`;
 }
 
-// Ziel und Belohnung: gleiche Bausteine beim Einrichten und unter Mehr › Haushalt
+// Ziel und Belohnung: gleiche Bausteine beim Einrichten und unter Mehr › Gemeinsames Ziel
 const goalBlock = (goal) => {
   const own = GOAL_REWARDS.includes(goal.reward) ? '' : goal.reward;
   return `<p class="small">Wie viel von allen Aufgaben des Monats schafft ihr zusammen? Abmachungen zählen nicht, Abwesenheit fällt raus.</p>
     <div class="filters">${[80, 90, 100].map((n) => `<button data-goal-percent="${n}" aria-pressed="${goal.percent === n}">${n} %</button>`).join('')}</div>
-    <p class="small">Belohnung, wenn ihr es schafft (optional)</p>
+    <h2>Belohnung, wenn ihr es schafft (optional)</h2>
     <div class="filters">${GOAL_REWARDS.map((r) => `<button data-goal-reward="${r}" aria-pressed="${goal.reward === r}">${r}</button>`).join('')}</div>
     <label class="field">Eigene Belohnung<input type="text" data-goal-text maxlength="40" value="${esc(own)}" autocomplete="off"></label>`;
 };
@@ -1216,11 +1198,13 @@ const setGoal = (patch) => {
   updateHH({ goal: { ...goalOf(S.hh), ...patch } });
 };
 
-function viewCode() {
-  return `<div class="qrwrap"><div class="qr big" id="qr" aria-label="QR-Code zum Beitreten"></div>
+const inviteView = () => `<div class="qrwrap"><div class="qr big" id="qr" aria-label="QR-Code zum Beitreten"></div>
       <button class="btn primary" data-action="${navigator.share ? 'share' : 'copy-link'}">Link teilen</button>
       <span class="small invitecode">Oder Code abtippen<b>${formatCode(S.code)}</b></span>
-      <p>Nicht öffentlich teilen.</p></div>
+      <p>Nicht öffentlich teilen.</p></div>`;
+
+function viewCode() {
+  return `${inviteView()}
     ${householdFull(S.hh) ? fullNote() : ''}
     ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}`;
 }
@@ -1379,8 +1363,8 @@ function renderSetup() {
     body = `<h2>Aufgaben</h2>
       <p class="small">Bereich antippen, Aufgabe antippen = übernehmen. Rhythmus und Dauer kannst du gleich hier ändern.</p>
       ${areaTiles()}${err}
-      <div class="btnrow"><button class="btn" data-setup="${st.mode === 'suggest' ? 'plan-suggest' : 'template'}">Zurück</button><button class="btn primary" data-setup="areas-next">Weiter</button></div>
-      <div class="setup-total" id="pickTotal">${pickTotal()}</div>`;
+      <div class="setup-total" id="pickTotal">${pickTotal()}</div>
+      <div class="btnrow"><button class="btn" data-setup="${st.mode === 'suggest' ? 'plan-suggest' : 'template'}">Zurück</button><button class="btn primary" data-setup="areas-next">Weiter</button></div>`;
   } else if (st.step === 'split') {
     const load = loadByPerson(st.tasks, setupCtx());
     const names = st.persons.map((p) => esc(p.name.trim()));
@@ -1389,7 +1373,7 @@ function renderSetup() {
     body = `<h2>Aufteilung</h2>
       <div class="banner now">${names.map((n, i) => `${n} <strong>${hours(load[`p${i + 1}`])} h</strong>`).join(' · ')} pro Monat</div>
       <p class="small">Automatisch fair verteilt: insgesamt möglichst gleich viel Zeit (Dauer × Häufigkeit), das Häufige zuerst. Antippen gibt eine Aufgabe ${st.persons.length > 2 ? 'der nächsten' : 'der anderen'} Person – die Bilanz rechnet mit. Gemeinsames zählt ${st.persons.length > 2 ? 'zu gleichen Teilen' : 'je zur Hälfte'}. Zeiten kannst du später bei jeder Aufgabe ändern.</p>
-      <div class="tile">${switchLine('setup-rotate', 'refresh', 'Monatlich tauschen', st.rotate
+      <div class="tile">${switchLine('setup-rotate', 'swap', 'Monatlich tauschen', st.rotate
         ? `${st.persons.length > 2 ? 'Die Listen wandern jeden Monat reihum' : 'Die beiden Listen tauschen jeden Monat'}, Halbjährliches und Jährliches bei jedem Durchgang. Erster Tausch am ${fmtDate(nextSwap({ rotateFrom: rotationBase(st.start) }, st.start))}`
         : 'Aufgaben bleiben fix bei einer Person. Unter „Mehr“ kannst du das später ändern.', st.rotate)}</div>
       ${st.persons.map((p, i) => `<h2><i class="sw" style="--pc:var(--c-${p.color})"></i>${names[i]}</h2><div class="rows">${list(PACKAGES[i])}</div>`).join('')}
@@ -1399,11 +1383,11 @@ function renderSetup() {
   } else if (st.step === 'goal') {
     body = `<h2>Euer gemeinsames Ziel</h2>
       ${goalBlock(st.goal)}
-      <p class="small">Später änderbar unter Mehr › Haushalt.</p>${startLine(st)}${err}
+      <p class="small">Später änderbar unter Mehr › Gemeinsames Ziel.</p>${startLine(st)}${err}
       <div class="btnrow"><button class="btn" data-setup="back-split">Zurück</button><button class="btn primary" data-setup="create-template">${finish}</button></div>`;
   } else if (st.step === 'rules') {
     body = `<h2>Abmachungen</h2>
-      <p class="small">Selbstverständliches für jeden Tag – für alle abhakbar, nie „offen“. Später in den Optionen änderbar.</p>
+      <p class="small">Selbstverständliches für jeden Tag – für alle abhakbar, nie „offen“. Später unter Mehr › Abmachungen änderbar.</p>
       ${ruleChips(st.rules, 'data-setup-rule')}${pickedTasks().length ? '' : startLine(st)}${err}
       <div class="btnrow"><button class="btn" data-setup="areas">Zurück</button>${pickedTasks().length
         ? '<button class="btn primary" data-setup="to-split">Weiter</button>'
@@ -1413,7 +1397,7 @@ function renderSetup() {
   } else if (st.step === 'created') {
     body = `<h2>Haushalt angelegt</h2>
       <p>Jetzt ${st.persons.slice(1).map((p) => esc(p.name.trim())).join(', ').replace(/, ([^,]*)$/, ' und $1')} einladen: QR-Code mit der Handy-Kamera scannen oder den Link schicken.</p>
-      ${inviteBlock()}
+      ${inviteView()}
       <div class="btnrow"><button class="btn primary block" data-setup="done">Weiter</button></div>`;
   } else if (st.step === 'joined') {
     body = `<h2>Beigetreten</h2>
@@ -1490,10 +1474,6 @@ function resetPlan(withTemplate) {
 // ---------- Einladung ----------
 
 const inviteLink = () => `${location.origin}${location.pathname}?join=${S.code}`;
-const inviteBlock = () => `<div class="qr" id="qr" aria-label="QR-Code zum Beitreten"></div>
-  <div class="btnrow">${navigator.share ? '<button class="btn" data-action="share">Link teilen</button>' : ''}<button class="btn" data-action="copy-link">Link kopieren</button></div>
-  <p class="small">Oder in Fairplan unter „Beitreten“ den Code eingeben: <span class="code">${formatCode(S.code)}</span></p>`;
-
 // QR-Bibliothek erst bei Bedarf laden
 let qrLib;
 function fillQr() {
@@ -1794,9 +1774,8 @@ app.addEventListener('click', (e) => {
   if (d.go) { S.stack.push(S.view); S.view = d.go; history.pushState(null, ''); window.scrollTo(0, 0); return render(); }
   if (el.matches('[data-back]')) { S.addRule = false; return history.back(); }
   if (d.filter) { S.filter = d.filter; return render(); }
-  if (d.kindFilter) { S.kindFilter = d.kindFilter; return render(); }
   if (d.awayClear) return updateHH({ away: { ...(S.hh.away || {}), [d.awayClear]: {} } });
-  if (d.planMode) { S.planMode = d.planMode; S.planDate = S.calDay; return render(); }
+  if (d.planMode) { S.planMode = d.planMode; S.planDate = S.calDay || S.planDate; return render(); }
   if (d.planNav) {
     const a = planAnchor(), step = +d.planNav;
     if (S.planMode === 'week') S.planDate = fromDay(toDay(a) + 7 * step);
@@ -1804,10 +1783,10 @@ app.addEventListener('click', (e) => {
       const [y, m] = a.split('-').map(Number);
       S.planDate = `${new Date(y, m - 1 + step, 1).getFullYear()}-${String(new Date(y, m - 1 + step, 1).getMonth() + 1).padStart(2, '0')}-01`;
     }
-    S.calDay = S.today >= planRange()[0] && S.today <= planRange()[1] ? S.today : planRange()[0];
+    S.calDay = null;
     return render();
   }
-  if (d.pickDay) { S.calDay = d.pickDay; return render(); }
+  if (d.pickDay) { S.calDay = S.calDay === d.pickDay ? null : d.pickDay; return render(); }
   if (d.statMode) { S.statMode = d.statMode; return render(); }
   if (d.reopen) {
     const c = S.dayComps.find((x) => x.id === d.reopen);
@@ -2015,7 +1994,10 @@ app.addEventListener('change', (e) => {
   }
   if (d.goalText !== undefined && !S.setup) return setGoal({ reward: el.value.trim() });
   if (d.switch === 'setup-rotate') { S.setup.rotate = el.checked; return renderSetup(); }
-  if (d.switch === 'rotate') return updateHH({ rotateFrom: el.checked ? rotationBase(S.today) : null });
+  if (d.switch === 'rotate') {
+    if (!el.checked && !confirm('Monatlich tauschen ausschalten?\n\nDie Listen gehen zurück auf den Anfang.')) { el.checked = true; return; }
+    return updateHH({ rotateFrom: el.checked ? rotationBase(S.today) : null });
+  }
   if (d.switch === 'vibrate') { ls.set('vibrate', el.checked ? null : '0'); if (el.checked) haptic(); return; }
   if (d.switch === 'badge') {
     ls.set('badge', el.checked ? null : '0');
@@ -2147,14 +2129,14 @@ function openEditor(id) {
   const months = (cur) => MONTHS.map((m, i) => opt(i + 1, m, cur)).join('');
   const rotate = !!S.hh.rotateFrom;
   sheet.innerHTML = `<form id="taskForm" novalidate>
-    <header class="top"><h1>${isNew ? 'Neue Aufgabe' : 'Aufgabe bearbeiten'}</h1></header>
+    <header class="top subtop"><button type="button" class="icobtn" data-close aria-label="Zurück">${icon('back', 22)}</button><h1>${isNew ? 'Neue Aufgabe' : 'Aufgabe bearbeiten'}</h1></header>
     <label class="field">Titel<input type="text" name="title" value="${esc(t.title)}" maxlength="120"></label>
-    <label class="field">Intervall<select name="kind">${KINDS.filter((k) => k !== 'custom' || kind === 'custom').map((k) => opt(k, k === 'custom' ? `Eigenes: alle ${t.n} ${UNIT_LABEL[t.unit]?.[1] ?? ''}` : KIND_LABEL[k], kind)).join('')}</select></label>
+    <label class="field">Wie oft?<select name="kind">${KINDS.filter((k) => k !== 'custom' || kind === 'custom').map((k) => opt(k, k === 'custom' ? `Eigenes: alle ${t.n} ${UNIT_LABEL[t.unit]?.[1] ?? ''}` : KIND_LABEL[k], kind)).join('')}</select></label>
     <div class="inline" data-custom><span>alle</span><input type="number" name="n" min="1" max="999" value="${t.n}" inputmode="numeric">
       <select name="unit">${Object.entries(UNIT_LABEL).map(([u, l]) => opt(u, l[1], t.unit)).join('')}</select></div>
     <label class="field" data-permonth>Ca. wie oft pro Monat?<input type="number" name="perMonth" min="0" max="99" step="0.5" inputmode="decimal" value="${t.perMonth ?? ''}"></label>
-    <label class="field">Zuteilung<select name="assign">${assignOptions(t, rotate, opt)}</select></label>
-    <label class="field">Dauer in Minuten (geschätzt, für die faire Aufteilung)<input type="number" name="min" min="0" max="999" inputmode="numeric" value="${t.min ?? ''}"></label>
+    <label class="field">Wer?<select name="assign">${assignOptions(t, rotate, opt)}</select></label>
+    <label class="field">Wie lange? In Minuten, für die faire Aufteilung<input type="number" name="min" min="0" max="999" inputmode="numeric" value="${t.min ?? ''}"></label>
     <p class="small" data-next></p>
     <details class="more" ${t.note || t.season || t.steps?.length || Number.isInteger(t.day) ? 'open' : ''}>
       <summary>Mehr: Tag, Termin, Saison, Hinweis, Teilschritte</summary>
@@ -2192,8 +2174,9 @@ function openEditor(id) {
     if (!rotate) return;
     for (const o of f.assign.options) {
       if (!isPackage(o.value)) continue;
-      const owner = ownerNow(draft({ assign: o.value, fixed: false }), S.hh, S.today);
-      o.textContent = `Paket ${o.value} (jetzt ${S.hh.persons.find((p) => p.id === owner)?.name ?? ''})`;
+      const d = draft({ assign: o.value, fixed: false });
+      const owner = ownerNow(d, S.hh, S.today);
+      o.textContent = `${S.hh.persons.find((p) => p.id === owner)?.name ?? ''}, tauscht ${swapsByRound(d, S.hh) ? 'je Durchgang' : 'monatlich'}`;
     }
   };
   // Entwurf aus dem Formular, für die Vorschau der nächsten Termine
@@ -2235,8 +2218,8 @@ function openEditor(id) {
     $('[data-pos]', form).hidden = !rhythm;
     if (rhythm) posOptions();
     if (k === 'weekly' && f.pos.options.length < 2) $('[data-pos]', form).hidden = true; // nur ein Putztag: nichts zu wählen
-    const next = upcoming(draft(), 3).map((w) => (w.start === w.end ? fmtWd(w.start) : `${fmtWd(w.start)}–${fmtWd(w.end)}`));
-    $('[data-next]', form).textContent = next.length && k !== 'daily' ? `Nächste Termine: ${next.join(' · ')}` : '';
+    const next = upcoming(draft(), 3).find((w) => w.start > S.today); // ein laufender Termin zählt nicht als nächster
+    $('[data-next]', form).textContent = next && k !== 'daily' ? `Nächster Termin: ${fmtWd(next.start)}` : '';
     paintPackages();
     $('[data-custom]', form).hidden = k !== 'custom';
     $('[data-permonth]', form).hidden = k !== 'asneeded';
@@ -2250,7 +2233,7 @@ function openEditor(id) {
   f.kind.addEventListener('change', sync);
   f.hasSeason.addEventListener('change', sync);
   for (const el of [f.day, f.pos, f.n, f.unit, f.from, f.to, f.from2, f.to2, f.assign]) el.addEventListener('change', sync);
-  $('[data-close]', form).onclick = closeEditor;
+  form.querySelectorAll('[data-close]').forEach((b) => { b.onclick = closeEditor; });
   const del = $('[data-delete]', form);
   if (del) del.onclick = () => {
     if (!confirm(`„${t.title}“ löschen?`)) return;
