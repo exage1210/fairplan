@@ -155,11 +155,26 @@ Gilt vor älteren Einträgen oben („einmal erreicht bleibt erreicht“, Joker 
 
 ## Personen an einem Ort (1.11.2026, v46)
 Gilt vor älteren Einträgen oben („voll ist nicht erkennbar“, Haushalts-Code unter Verwaltung, Abschnitte auf Aktuell).
-- Voll (`householdFull`): Alle Personen stehen beim Anlegen fest; `seen_<id>` im Haushalt wird einmalig gesetzt, sobald die Person die App nutzt (`markSeen`). Voll = alle waren da. Beitritt bleibt ungesperrt. Ein Vermerk lässt sich nicht zurücknehmen.
+- Voll (`householdFull`): Alle Personen stehen beim Anlegen fest; `seen_<id>` im Haushalt wird einmalig gesetzt, sobald die Person die App nutzt (`markSeen`). Voll = alle waren da. Voll gilt nur für neue Personen: Über Link, QR oder Code kann jede bestehende Person jederzeit wieder beitreten (z. B. neues Handy), deshalb nie sperren. Ein Vermerk lässt sich nicht zurücknehmen.
 - Mehr › Personen (`haushalt`): nicht voll „Person einladen“ plus Textzeile zu neuem Haushalt; voll `fullNote` plus „Neues Handy? Code anzeigen“. Einladeseite `code`: großer QR, „Link teilen“ (ohne Teilen-Funktion kopiert er), Code klein. „Wer bist du?“ zeigt den Hinweis nur bei vollem Haushalt. Gemeinsames Ziel ist die eigene Seite `ziel`.
 - Tier-Icons: `[data-c]` setzt dieselben `--a-*` wie `[data-accent]`, daher je Person. Kreis `--a-soft` (hell/Farbe `--a-soft-l`), Tier `--a-base` (hell/Farbe `--a-strong`), auch in `.colors` und `.avopts`. Buchstaben-Avatare bleiben voll gefärbt.
 - Farbauswahl: nur Tiere, kein Text, auch kein „vergeben“ (ausgegraut). Name steht in der Überschrift („Deine Farbe: Violett“, `colorName`); Tiernamen sind nie sichtbar. `aria-label` „Koralle (Krabbe)“ (`colorLabel`), gesperrt mit „, vergeben an …“. Namen und Reihenfolge nur in `logic.js`.
 - Aktuell: Statuskarte · Abmachungen · Alles erledigt · Als Nächstes · Aufgaben · andere Personen · Bei Bedarf · Erledigt. Bei Bedarf eingeklappt „Bei Bedarf (N)“ mit grauer Zeile in der `summary`; `nowRow(..., plain)` nur Name und Haken, ohne Teilschritte.
+
+## Einfacher (1.11.2026, v47)
+Gilt vor älteren Einträgen oben (Statuskarte, Tagesliste im Plan, Kacheln je Zeile, „Paket“ im Editor).
+- Aktuell beantwortet nur: Was ist jetzt zu tun? Statuskarte (`.card.status`, Puls bleibt): „Noch N offen“ oder „Alles erledigt“ mit Stern, Wochenbalken, nur bei Bedarf Start des Plans und Tausch. Eine eigene „Alles erledigt“-Karte gibt es nicht mehr. Reihenfolge: Statuskarte · Abmachungen · Als Nächstes · Aufgaben · andere Personen · Bei Bedarf · Erledigt.
+- Sortierung `urgency`: Rotes, was drängt, was Zeit hat, was erst kommt; darin wie bisher `byOwnerRhythm`.
+- Serie steht schon in der Statistik, dazu neu „Ziel und Joker“. „Deine Woche“ und die Zeile „Als Nächstes“ in der Karte sind weg.
+- Zeilen: `.list` ist eine Kachel mit Trennlinien, Zeile mindestens 48 pt, gilt für alle Listen. Abmachungen ohne „täglich“ und ohne Erklärzeile auf Aktuell. Termin steht vor dem Hinweis.
+- Plan: `S.calDay` null = nur Vorschau; Antippen öffnet den Tag, nochmal antippen schließt, Blättern schließt. Punkte statt Kreise in der Tagesliste, Kalender behält Ringe für Geplantes. „Nächste 2 Wochen“ in der Monatsansicht eingeklappt, mit Legende.
+- Editor: „Wie oft?“, „Wer?“, „Wie lange?“, „Daniel, tauscht monatlich“ (`je Durchgang` bei `swapsByRound`), „Nächster Termin“ ohne laufenden Termin, Zurück-Pfeil oben. Intern bleiben die Pakete.
+- Einrichtung: `.setup-total` neutral und über den Knöpfen.
+- Überschriften: `h2` wie die Köpfe der aufklappbaren Bereiche (16 px, kein Großbuchstaben-Stil); „Aufgaben“ als `h2.main` in voller Farbe, immer offen, ohne Pfeil, leer gar nicht.
+- Aufgabenliste: nur noch Filter nach Personen; Rhythmen als `fold`, offen ist Wöchentlich, sonst der erste. Häkchen bleiben.
+- Mehr: „Plan neu einrichten“ unter Verwaltung; „Monatlich tauschen“ nennt nur den nächsten Tausch, Ausschalten fragt nach (Listen gehen zurück auf den Anfang). Neue Symbole `swap`, `target`.
+- Statistik: „Nach Rhythmus“ eingeklappt; offene Meilensteine „noch offen“ statt „läuft“.
+- Einladen nach dem Anlegen und unter Mehr: dieselbe `inviteView`. Tausch- und Ziel-Hinweis mit × (`.swapnote::after`).
 
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
