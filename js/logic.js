@@ -727,6 +727,12 @@ export const householdFull = (ctx) => ctx.persons.every((p) => !!ctx[`seen_${p.i
 // Reihenfolge nach Farbverlauf, Vorschlag je Person möglichst weit auseinander
 export const PALETTE = ['koralle', 'orange', 'senf', 'gruen', 'tuerkis', 'blau', 'violett', 'rosa'];
 export const COLOR_SUGGESTIONS = ['koralle', 'tuerkis', 'violett', 'senf', 'blau', 'gruen'];
+const COLOR_NAMES = {
+  koralle: ['Koralle', 'Krabbe'], orange: ['Orange', 'Fuchs'], senf: ['Senf', 'Biene'], gruen: ['Grün', 'Frosch'],
+  tuerkis: ['Türkis', 'Schildkröte'], blau: ['Blau', 'Wal'], violett: ['Violett', 'Oktopus'], rosa: ['Rosa', 'Flamingo'],
+};
+export const colorName = (c) => COLOR_NAMES[c]?.[0] ?? '';
+export const colorLabel = (c) => (COLOR_NAMES[c] ? `${COLOR_NAMES[c][0]} (${COLOR_NAMES[c][1]})` : '');
 const OLD_COLORS = { gelb: 'senf', gold: 'senf', rot: 'koralle' };
 
 // Erster Vorschlag, der noch frei ist

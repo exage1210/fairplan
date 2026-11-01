@@ -5,17 +5,13 @@ import {
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
   PACKAGES, MAX_PERSONS, isPackage, swapsByRound, upsertHome,
   goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE,
-  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull,
+  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull, PALETTE, colorName, colorLabel,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED, GOAL_REWARDS } from './template.js';
 
 // ---------- Konstanten & Hilfen ----------
 
-const COLORS = [
-  ['koralle', 'Koralle'], ['orange', 'Orange'], ['senf', 'Senf'], ['gruen', 'Grün'],
-  ['tuerkis', 'Türkis'], ['blau', 'Blau'], ['violett', 'Violett'], ['rosa', 'Rosa'],
-];
 const KIND_LABEL = {
   daily: 'Täglich', weekly: 'Wöchentlich', biweekly: 'Alle 2 Wochen', monthly: 'Monatlich',
   quarterly: 'Vierteljährlich', halfyear: 'Halbjährlich', yearly: 'Jährlich', custom: 'Eigenes Intervall',
@@ -62,14 +58,14 @@ const ICON_PATHS = {
 const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON_PATHS[name]}"></path></svg>`;
 // Tier je Personenfarbe
 const ANIMALS = {
-  blau: { name: 'Wal', fill: 'M3 13.5C3 10 6.5 8.5 10.5 8.5c3.8 0 6 1.7 7.2 3.6L21.5 9.5V16l-3.6-1.6C16.6 16.6 14 18 10.5 18 6 18 3 16.5 3 13.5z', stroke: 'M10.5 7.5V5M8 4.6c1 .1 1.8.6 2.5 1.4.7-.8 1.5-1.3 2.5-1.4', eyes: 'M6 12.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
-  rosa: { name: 'Flamingo', fill: 'M9.6 5.2a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0zM10.2 5.6L3.8 8.4l6.8-1.1z', stroke: 'M14.2 5.6c3 .6 3.4 4 1 6.6-2.4 2.6-3.8 4.6-3.4 8.3', eyes: 'M11.6 4.8a.75 .75 0 1 0 1.5 0a.75 .75 0 1 0-1.5 0z', detail: '' },
-  senf: { name: 'Biene', fill: 'M3.6 14.6a7.6 5 0 1 0 15.2 0a7.6 5 0 1 0-15.2 0z', stroke: 'M9.8 9.2C8.6 6.6 9 4 10.8 3.8c1.8-.2 2.4 2.7 1.5 5.4M13.6 9.4c.5-2.3 2.1-4.1 3.7-3.5 1.5.6.9 3.1-1.3 4.1M19.4 14.6h2', eyes: 'M6 13.5a.95 .95 0 1 0 1.9 0a.95 .95 0 1 0-1.9 0z', detail: 'M10.6 10v9.2M14.6 10.4v8.4' },
-  gruen: { name: 'Frosch', fill: 'M3 15.2c0-3.3 3.6-5.4 9-5.4s9 2.1 9 5.4-3.6 5-9 5-9-1.7-9-5zM4.8 8.6a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0zM13.6 8.6a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0z', stroke: '', eyes: 'M6.5 8.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0zM15.3 8.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0z', detail: 'M9 15.6c1.8 1.3 4.2 1.3 6 0' },
-  violett: { name: 'Oktopus', fill: 'M5.5 10.6a6.5 6.5 0 0 1 13 0v2.4c0 1-.8 1.6-1.8 1.6H7.3c-1 0-1.8-.6-1.8-1.6z', stroke: 'M6.8 14c-.3 2.3-1.5 3.8-3.4 4.2M10 14.6c0 2.5-.8 4.4-2.5 5.6M14 14.6c0 2.5.8 4.4 2.5 5.6M17.2 14c.3 2.3 1.5 3.8 3.4 4.2', eyes: 'M8.5 9.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0zM13.5 9.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
-  koralle: { name: 'Krabbe', fill: 'M5.4 15a6.6 4.8 0 1 0 13.2 0a6.6 4.8 0 1 0-13.2 0zM1.8 5.2a2 2 0 1 0 4 0a2 2 0 1 0-4 0zM18.2 5.2a2 2 0 1 0 4 0a2 2 0 1 0-4 0z', stroke: 'M6.4 11.6C4.6 10.4 3.8 8.6 3.8 6M17.6 11.6c1.8-1.2 2.6-3 2.6-5.6M5.8 18.4l-2.6 2M18.2 18.4l2.6 2', eyes: 'M8.6 13.8a1 1 0 1 0 2 0a1 1 0 1 0-2 0zM13.4 13.8a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: 'M10 16.6c1.2.8 2.8.8 4 0' },
-  tuerkis: { name: 'Schildkröte', fill: 'M3.4 15.6a7.8 7.8 0 0 1 15.6 0zM17.8 12.2a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0z', stroke: 'M6.8 16.4v2.4M15.6 16.4v2.4M3.4 15.8l-1.6.9', eyes: 'M20.1 11.6a.75 .75 0 1 0 1.5 0a.75 .75 0 1 0-1.5 0z', detail: 'M6.8 15.4l2.4-3.6h3.8l2.4 3.6M9.2 11.8l1-3.2M13 11.8l-1-3.2' },
-  orange: { name: 'Fuchs', fill: 'M3.8 4.5l5.2 4h6l5.2-4-.6 9.4L12 20.8 4.4 13.9z', stroke: '', eyes: 'M8.6 12.2a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM13.6 12.2a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM11 16.4a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
+  blau: { fill: 'M3 13.5C3 10 6.5 8.5 10.5 8.5c3.8 0 6 1.7 7.2 3.6L21.5 9.5V16l-3.6-1.6C16.6 16.6 14 18 10.5 18 6 18 3 16.5 3 13.5z', stroke: 'M10.5 7.5V5M8 4.6c1 .1 1.8.6 2.5 1.4.7-.8 1.5-1.3 2.5-1.4', eyes: 'M6 12.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
+  rosa: { fill: 'M9.6 5.2a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0zM10.2 5.6L3.8 8.4l6.8-1.1z', stroke: 'M14.2 5.6c3 .6 3.4 4 1 6.6-2.4 2.6-3.8 4.6-3.4 8.3', eyes: 'M11.6 4.8a.75 .75 0 1 0 1.5 0a.75 .75 0 1 0-1.5 0z', detail: '' },
+  senf: { fill: 'M3.6 14.6a7.6 5 0 1 0 15.2 0a7.6 5 0 1 0-15.2 0z', stroke: 'M9.8 9.2C8.6 6.6 9 4 10.8 3.8c1.8-.2 2.4 2.7 1.5 5.4M13.6 9.4c.5-2.3 2.1-4.1 3.7-3.5 1.5.6.9 3.1-1.3 4.1M19.4 14.6h2', eyes: 'M6 13.5a.95 .95 0 1 0 1.9 0a.95 .95 0 1 0-1.9 0z', detail: 'M10.6 10v9.2M14.6 10.4v8.4' },
+  gruen: { fill: 'M3 15.2c0-3.3 3.6-5.4 9-5.4s9 2.1 9 5.4-3.6 5-9 5-9-1.7-9-5zM4.8 8.6a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0zM13.6 8.6a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0z', stroke: '', eyes: 'M6.5 8.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0zM15.3 8.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0z', detail: 'M9 15.6c1.8 1.3 4.2 1.3 6 0' },
+  violett: { fill: 'M5.5 10.6a6.5 6.5 0 0 1 13 0v2.4c0 1-.8 1.6-1.8 1.6H7.3c-1 0-1.8-.6-1.8-1.6z', stroke: 'M6.8 14c-.3 2.3-1.5 3.8-3.4 4.2M10 14.6c0 2.5-.8 4.4-2.5 5.6M14 14.6c0 2.5.8 4.4 2.5 5.6M17.2 14c.3 2.3 1.5 3.8 3.4 4.2', eyes: 'M8.5 9.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0zM13.5 9.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
+  koralle: { fill: 'M5.4 15a6.6 4.8 0 1 0 13.2 0a6.6 4.8 0 1 0-13.2 0zM1.8 5.2a2 2 0 1 0 4 0a2 2 0 1 0-4 0zM18.2 5.2a2 2 0 1 0 4 0a2 2 0 1 0-4 0z', stroke: 'M6.4 11.6C4.6 10.4 3.8 8.6 3.8 6M17.6 11.6c1.8-1.2 2.6-3 2.6-5.6M5.8 18.4l-2.6 2M18.2 18.4l2.6 2', eyes: 'M8.6 13.8a1 1 0 1 0 2 0a1 1 0 1 0-2 0zM13.4 13.8a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: 'M10 16.6c1.2.8 2.8.8 4 0' },
+  tuerkis: { fill: 'M3.4 15.6a7.8 7.8 0 0 1 15.6 0zM17.8 12.2a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0z', stroke: 'M6.8 16.4v2.4M15.6 16.4v2.4M3.4 15.8l-1.6.9', eyes: 'M20.1 11.6a.75 .75 0 1 0 1.5 0a.75 .75 0 1 0-1.5 0z', detail: 'M6.8 15.4l2.4-3.6h3.8l2.4 3.6M9.2 11.8l1-3.2M13 11.8l-1-3.2' },
+  orange: { fill: 'M3.8 4.5l5.2 4h6l5.2-4-.6 9.4L12 20.8 4.4 13.9z', stroke: '', eyes: 'M8.6 12.2a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM13.6 12.2a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM11 16.4a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
 };
 const animalSvg = (color) => {
   const a = ANIMALS[color] || ANIMALS.violett;
@@ -1109,9 +1105,9 @@ const putztagWord = (days, one, many) => ((days?.length || 1) === 1 ? one : many
 const sharedDaysOf = (hh) => (hh.sharedDays?.length ? hh.sharedDays : [5]);
 
 // Farbwahl wie im Profil: Tier in der Farbe, bereits vergebene ausgegraut
-const colorGrid = (current, takenBy, attr) => `<div class="colors">${COLORS.map(([c, l]) => {
+const colorGrid = (current, takenBy, attr) => `<div class="colors">${PALETTE.map((c) => {
   const owner = takenBy(c);
-  return `<button ${attr} data-color="${c}" data-c="${c}" aria-pressed="${current === c}" ${owner ? 'disabled' : ''} aria-label="${l}, ${ANIMALS[c].name}${owner?.name ? `, vergeben an ${esc(owner.name)}` : ''}">${animalSvg(c)}<span>${l}${owner ? '<small>vergeben</small>' : ''}</span></button>`;
+  return `<button ${attr} data-color="${c}" data-c="${c}" aria-pressed="${current === c}" ${owner ? 'disabled' : ''} aria-label="${colorLabel(c)}${owner ? `, vergeben${owner.name ? ` an ${esc(owner.name)}` : ''}` : ''}">${animalSvg(c)}</button>`;
 }).join('')}</div>`;
 
 function viewProfile() {
@@ -1122,13 +1118,13 @@ function viewProfile() {
       <input type="file" id="photoFile" accept="image/*" hidden></div>
     <div class="avopts">
       <button data-avatar="letter" aria-pressed="${kind === 'letter'}" aria-label="Anfangsbuchstabe">${esc(initial(me))}</button>
-      <button data-avatar="animal" aria-pressed="${kind === 'animal'}" aria-label="${ANIMALS[me.color]?.name ?? 'Tier'}">${animalSvg(me.color)}</button>
+      <button data-avatar="animal" aria-pressed="${kind === 'animal'}" aria-label="${colorLabel(me.color)}">${animalSvg(me.color)}</button>
       ${me.photo ? `<button data-avatar="photo" aria-pressed="${kind === 'photo'}" aria-label="Foto"><img src="${esc(me.photo)}" alt=""></button>` : ''}
     </div>
     ${me.photo ? '<button class="textbtn danger" data-action="del-photo">Foto löschen</button>' : ''}</div>
     <h2><label for="pname">Name</label></h2>
     <input type="text" id="pname" data-person-name="${idx}" value="${esc(me.name)}" maxlength="30">
-    <h2>Deine Farbe</h2>${colorGrid(me.color, (c) => hh.persons.find((p) => p.color === c && p.id !== S.me), `data-person-color="${idx}"`)}
+    <h2>Deine Farbe: ${colorName(me.color)}</h2>${colorGrid(me.color, (c) => hh.persons.find((p) => p.color === c && p.id !== S.me), `data-person-color="${idx}"`)}
     <h2>${putztagWord(me.days, 'Dein Putztag', 'Deine Putztage')}</h2>${dayChips(me.days?.length ? me.days : [5], `data-person-day="${idx}"`)}
     <span class="hint">Ein oder mehrere Tage, an denen deine Aufgaben dran sind.</span>`;
 }
@@ -1356,7 +1352,7 @@ function renderSetup() {
         <div class="setup-head">${avatar({ ...p, name: p.name || `${i + 1}` }, 'l')}<strong>Person ${i + 1}</strong></div>
         <h2><label for="sname${i}">Name</label></h2>
         <input type="text" id="sname${i}" data-setup-name="${i}" value="${esc(p.name)}" maxlength="30">
-        <h2>Farbe</h2>${colorGrid(p.color, (c) => st.persons.find((o, j) => j !== i && o.color === c), `data-setup-color="${i}"`)}
+        <h2>Farbe: ${colorName(p.color)}</h2>${colorGrid(p.color, (c) => st.persons.find((o, j) => j !== i && o.color === c), `data-setup-color="${i}"`)}
         <h2>${putztagWord(p.days, 'Putztag', 'Putztage')}</h2>${dayChips(p.days, `data-setup-day="${i}"`)}
       </section>`).join('')}
       <section class="tile setup-person"><h2 style="margin-top:0">${putztagWord(st.shared, 'Gemeinsamer Putztag', 'Gemeinsame Putztage')}</h2>${dayChips(st.shared, 'data-setup-shared')}
