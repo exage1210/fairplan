@@ -5,7 +5,7 @@ import {
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
   PACKAGES, MAX_PERSONS, isPackage, swapsByRound, upsertHome,
   goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE,
-  nextRounds, migrateColors, suggestColor,
+  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED, GOAL_REWARDS } from './template.js';
@@ -35,7 +35,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.44';
+const APP_VERSION = '2.0.46';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -130,6 +130,7 @@ const S = {
   calDay: null, // gewählter Tag im Plan, null = heute
   statMode: 'week',
   addRule: false, // Eingabe „+ Abmachung“ offen
+  undone: [], // zurückgenommene Haken, warten auf die stille Prüfung (settleUndone)
   cheered: true, // beim Öffnen nicht einblenden, nur wenn gerade alles erledigt wurde
   backup: null, // fertig geladene Sicherung, wartet auf „Datei sichern“
   today: localToday(),
@@ -286,7 +287,7 @@ function ensureDays(from) {
   if (!S.dayFrom) S.daysReady = false;
   S.dayFrom = from;
   S.daySub?.();
-  S.daySub = S.store.watchDays(S.code, from, '9999-12-31', (list) => { S.dayComps = list.filter((c) => c.step == null); S.daysReady = true; render(); });
+  S.daySub = S.store.watchDays(S.code, from, '9999-12-31', (list) => { S.dayComps = list.filter((c) => c.step == null); S.dayLoaded = from; S.daysReady = true; render(); });
 }
 
 // ---------- Rendern ----------
@@ -333,6 +334,7 @@ function render() {
   }
   if (!person(S.me)) return renderWhoAmI();
   rememberHome();
+  markSeen();
 
   syncAccent();
   const recent = fromDay(toDay(S.today) - 62);
@@ -340,6 +342,7 @@ function render() {
   const need = S.view === 'statistik' ? [S.hh.setup, fromDay(toDay(year) - 366), fromDay(toDay(S.today) - 40)].sort()[0]
     : S.view === 'plan' ? [recent, planRange()[0]].sort()[0] : recent;
   ensureDays(need);
+  settleUndone();
 
   const page = PAGES[S.view];
   const scroll = window.scrollY;
@@ -362,9 +365,10 @@ const TABS = [['heute', 'Aktuell', 'home'], ['plan', 'Plan', 'plan'], ['statisti
 const MAIN = { heute: () => viewToday(), plan: () => viewPlan(), statistik: () => viewStats(), mehr: () => viewMore() };
 const PAGES = {
   profil: ['Profil', () => viewProfile()],
-  haushalt: ['Haushalt', () => viewHousehold()],
+  haushalt: ['Personen', () => viewHousehold()],
+  ziel: ['Gemeinsames Ziel', () => goalBlock(goalOf(S.hh))],
   haushalte: ['Meine Haushalte', () => viewHomes()],
-  code: ['Haushalts-Code', () => viewCode()],
+  code: ['Person einladen', () => viewCode()],
   aufgaben: ['Aufgabenliste', () => viewTasks()],
   abmachungen: ['Abmachungen', () => viewRules()],
   putztag: [() => putztagWord(S.hh.sharedDays, 'Gemeinsamer Putztag', 'Gemeinsame Putztage'), () => viewSharedDay()],
@@ -454,14 +458,14 @@ const swipeRow = ({ done, locked, off, by, check, body }) => `<div class="swipe"
   </div>`;
 
 // Zeile für „Aktuell“: Intervall klein rechts, Zusatzzeile für Hinweis, Termin oder „Gemeinsam“
-function nowRow(it, sub = '', ahead = false) {
+function nowRow(it, sub = '', ahead = false, plain = false) {
   const t = it.task, k = kindOf(t);
   const iv = k === 'custom' ? `alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : SHORT_KIND[k];
   const done = it.status === 'done';
   const by = it.completion?.by;
   const locked = done && by !== S.me;
   const off = !it.key; // nächster Termin liegt in einer späteren Periode → noch nicht abhakbar
-  const extra = [it.owner === null && !done ? 'Gemeinsam' : '', t.note ? esc(t.note) : '', sub].filter(Boolean).join(' · ');
+  const extra = plain ? '' : [it.owner === null && !done ? 'Gemeinsam' : '', t.note ? esc(t.note) : '', sub].filter(Boolean).join(' · ');
   // Joker erst anbieten, wenn es knapp wird: sonst stünde der Knopf bei jeder Aufgabe
   const joker = it.owner === S.me && canJoker(it, S.today) && jokerOf(S.hh, S.me).count > 0 && toDay(it.end) - toDay(S.today) <= 2
     ? `<button class="jokerbtn" data-action="joker" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}">Joker: 1 Woche später</button>` : '';
@@ -469,8 +473,8 @@ function nowRow(it, sub = '', ahead = false) {
     done, locked, off, by,
     check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}" ${ahead ? `data-key="${esc(it.key)}"` : ''}
       ${done ? 'checked' : ''} ${off || locked ? 'disabled' : ''} aria-label="${esc(t.title)} erledigt">`,
-    body: `<div class="body"><div class="head"><span class="title">${esc(t.title)}</span><span class="kind">${iv}</span></div>
-      ${extra ? `<div class="meta">${extra}</div>` : ''}${ahead ? '' : stepsBlock(it)}${joker}</div>`,
+    body: `<div class="body"><div class="head"><span class="title">${esc(t.title)}</span>${plain ? '' : `<span class="kind">${iv}</span>`}</div>
+      ${extra ? `<div class="meta">${extra}</div>` : ''}${ahead || plain ? '' : stepsBlock(it)}${joker}</div>`,
   });
 }
 
@@ -632,8 +636,8 @@ function viewToday() {
       <hr>
       <div class="duo"><div><span>Deine Woche</span><b>${weekCount} erledigt</b></div>
         <div><span>Serie</span><b>${current ? `${streakText} in Folge` : streakText}</b></div></div>
-    </section>
-    ${calm ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${starSvg(`var(--c-${me.color})`, !S.cheered)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
+    </section>`;
+  const cheer = `${calm ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${starSvg(`var(--c-${me.color})`, !S.cheered)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
   if (S.compsReady) S.cheered = calm; // Stern nur zeichnen, wenn gerade alles erledigt wurde, nicht beim Öffnen oder Neuzeichnen
 
   const rows = (list, sub = whenText) => `<div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div>`;
@@ -658,11 +662,12 @@ function viewToday() {
     : `<details class="fold" data-fold="ahead-empty"><summary>${head('Als Nächstes', 0)}</summary><p class="small">In den nächsten 7 Tagen steht nichts an.</p></details>`;
 
   return `${card}
-    ${aheadBlock}
     ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} extra</span>` : ''}`, `<p class="small">Erledigt ihr nebenbei, so wie abgemacht. Wird nicht aufgeteilt, zählt aber in deiner Statistik.</p><div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
+    ${cheer}
+    ${aheadBlock}
     ${list.length || !calm ? fold('tasks', head('Aufgaben', list.length), rows(list), true) : ''}
-    ${need.length ? fold('need', head('Bei Bedarf', need.length), `<p class="small">Taucht nur auf, wenn ihr es braucht.</p>${rows(need, () => '')}`) : ''}
     ${others}
+    ${need.length ? fold('need', `<span class="needhead">Bei Bedarf (${need.length})<small>Ohne festen Termin – abhaken, wenn du es gemacht hast</small></span>`, `<div class="list">${need.map((i) => nowRow(i, '', false, true)).join('')}</div>`) : ''}
     ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.filter((i) => !inAhead(i)).length), `<div class="list">${doneRows}</div>`) : ''}`;
 }
 
@@ -693,13 +698,19 @@ function goalNote() {
     updateHH({ goalHits: { ...hits, [r.month]: goalOf(S.hh).reward } });
   }
   const reached = r.reached || hits[r.month] !== undefined;
-  if ((!reached && !r.settled) || ls.get('goal-seen') === r.month) return '';
   const reward = hits[r.month] ?? goalOf(S.hh).reward;
-  const text = !reached ? 'Neuer Monat, neues Ziel.' : `Geschafft! ${reward ? esc(reward) : 'Euer gemeinsames Ziel ist erreicht.'}`;
   if (reached && ls.get('goal-star') !== r.month) {
     ls.set('goal-star', r.month);
+    ls.set('goal-seen', null); // wieder erreicht: Hinweis kommt erneut
     celebrate(`Geschafft!${reward ? ` ${reward}` : ''}`, { colors: S.hh.persons.map((p) => p.color) });
   }
+  // Zurückgenommen: still, auch ohne „Neuer Monat, neues Ziel.“
+  if (!reached && ls.get('goal-star') === r.month) {
+    ls.set('goal-star', null);
+    ls.set('goal-seen', r.month);
+  }
+  if ((!reached && !r.settled) || ls.get('goal-seen') === r.month) return '';
+  const text = !reached ? 'Neuer Monat, neues Ziel.' : `Geschafft! ${reward ? esc(reward) : 'Euer gemeinsames Ziel ist erreicht.'}`;
   return `<button class="awaynote swapnote" data-action="goal-seen" style="--pc:var(--accent)">${text}</button>`;
 }
 
@@ -890,18 +901,23 @@ function dayStar() {
 }
 
 // Meilensteine: persönlich, einmal erreicht bleibt erreicht (stats_<id> im Haushalt: { longest, done: { id: Tag }, start })
-const statsOf = (id) => ({ longest: 0, done: {}, start: null, ...S.hh[`stats_${id}`] });
+const statsOf = (id) => ({ longest: 0, longestDay: null, done: {}, start: null, ...S.hh[`stats_${id}`] });
+// Ganzer Monat: ein vergangener Monat mit allen eigenen Terminen erledigt
+function wholeMonth() {
+  const months = [];
+  for (let d = toDay(monthBounds(S.hh.setup)[0]); d < toDay(monthBounds(S.today)[0]); d = toDay(monthBounds(fromDay(d))[1]) + 1) months.push(monthBounds(fromDay(d)));
+  const byId = doneMap();
+  return months.slice(-24).filter(([a]) => a >= S.dayFrom || S.hh.setup >= S.dayFrom)
+    .some(([a, b]) => { const l = dueBetween(S.tasks, S.hh, a, b, byId, S.me); return l.length && l.every((w) => w.done); });
+}
+const hasStarted = () => S.dayComps.some((c) => c.by === S.me && !c.rule && c.day >= S.hh.setup && S.tasks.some((t) => t.id === c.taskId));
 const milestones = whenChanged(() => {
   const mine = S.dayComps.filter((c) => c.by === S.me);
   const tasks = mine.filter((c) => !c.rule), rules = mine.filter((c) => c.rule);
   const st = statsOf(S.me);
   const { current, longest } = mySeries();
   const best = Math.max(st.longest, longest);
-  const byId = doneMap();
-  const months = [];
-  for (let d = toDay(monthBounds(S.hh.setup)[0]); d < toDay(monthBounds(S.today)[0]); d = toDay(monthBounds(fromDay(d))[1]) + 1) months.push(monthBounds(fromDay(d)));
-  const whole = st.done.month || months.slice(-24).filter(([a]) => a >= S.dayFrom || S.hh.setup >= S.dayFrom)
-    .some(([a, b]) => { const l = dueBetween(S.tasks, S.hh, a, b, byId, S.me); return l.length && l.every((w) => w.done); });
+  const whole = st.done.month || wholeMonth();
   const joker = jokerOf(S.hh, S.me);
   const goals = Object.keys(S.hh.goalHits || {}).length;
   const left = (n, goal) => `noch ${Math.max(0, goal - n)}`;
@@ -918,6 +934,35 @@ const milestones = whenChanged(() => {
   return { list, best, current, tasks };
 });
 
+// Rückgängig: Fällt die Grundlage weg, still zurücknehmen; wird es wieder erreicht, meldet syncStats es wie beim ersten Mal.
+// Geladen sind oft nur die letzten 62 Tage: Würde sich etwas ändern, erst den ganzen Verlauf holen und dann entscheiden.
+function settleUndone() {
+  if (!S.undone.length || !S.daysReady || !S.tasksLoaded) return;
+  const find = (id) => S.comps.get(id) || S.dayComps.find((c) => c.id === id);
+  S.undone = S.undone.filter((u) => { const c = find(u.id); return !c || c.at === u.at; }); // inzwischen neu abgehakt: nichts zu tun
+  if (!S.undone.length || S.undone.some((u) => find(u.id))) return; // noch nicht aus den Daten weg
+  const hits = S.hh.goalHits || {};
+  const nextHits = S.undone.filter((u) => !u.rule).reduce((h, u) => revokeGoalHits(h, S.tasks, S.hh, u.day, doneMap()), hits);
+  const mine = S.dayComps.filter((c) => c.by === S.me);
+  const tasks = mine.filter((c) => !c.rule).length, rules = mine.length - tasks;
+  const { longest } = mySeries();
+  const now = {
+    first: tasks >= 1, week: longest >= 1, week4: longest >= 4, month: wholeMonth(), tasks100: tasks >= 100, extra100: rules >= 100,
+    joker: jokerOf(S.hh, S.me).earned >= 1, goal: Object.keys(nextHits).length >= 1,
+  };
+  const facts = { now, longest, started: hasStarted(), setup: S.hh.setup };
+  const st = statsOf(S.me);
+  const next = S.undone.reduce((x, u) => revokeStats(x, u, facts), st);
+  if (next === st && nextHits === hits) { S.undone = []; return; }
+  if (S.dayLoaded > S.hh.setup) { ensureDays(S.hh.setup); return; }
+  S.undone = [];
+  const patch = {};
+  if (next !== st) patch[`stats_${S.me}`] = next;
+  if (nextHits !== hits) { patch.goalHits = nextHits; S.goalSaved = null; }
+  S.hh = { ...S.hh, ...patch };
+  updateHH(patch);
+}
+
 // Erreichtes festhalten; beim ersten Mal still, danach Puls in der Statuskarte und Stern beim ersten Haken
 function syncStats() {
   if (!S.daysReady || !S.tasksLoaded) return; // erst urteilen, wenn die Erledigungen da sind
@@ -926,10 +971,10 @@ function syncStats() {
   const st = statsOf(S.me);
   const { list, best, tasks } = milestones();
   const fresh = list.filter((m) => m.on && !st.done[m.id]);
-  const started = tasks.some((c) => c.day >= S.hh.setup && S.tasks.some((t) => t.id === c.taskId));
+  const started = hasStarted();
   const startNow = started && st.start !== S.hh.setup;
   if (!first && !fresh.length && best <= st.longest && !startNow) return;
-  const next = { longest: best, start: started ? S.hh.setup : st.start, done: { ...st.done, ...Object.fromEntries(fresh.map((m) => [m.id, S.today])) } };
+  const next = { longest: best, longestDay: best > st.longest ? S.today : st.longestDay, start: started ? S.hh.setup : st.start, done: { ...st.done, ...Object.fromEntries(fresh.map((m) => [m.id, S.today])) } };
   S.hh = { ...S.hh, [field]: next };
   updateHH({ [field]: next });
   if (first) return;
@@ -1034,7 +1079,8 @@ function viewMore() {
     .map(([v, l]) => `<button data-theme-set="${v}" aria-pressed="${theme() === v}">${l}</button>`).join('');
   return `<button class="ptile" data-go="profil">${avatar(me, 'l')}<span>${esc(me.name)}</span><span class="chev">${icon('chevron', 18)}</span></button>
     <h2>Wir</h2><div class="tile">
-      ${goRow('haushalt', 'users', 'Haushalt')}
+      ${goRow('haushalt', 'users', 'Personen', hh.persons.length)}
+      ${goRow('ziel', 'flag', 'Gemeinsames Ziel', `${goalOf(hh).percent} %`)}
       ${homes().length > 1 ? goRow('haushalte', 'list', 'Meine Haushalte', homes().length) : ''}
       ${goRow('putztag', 'plan', putztagWord(hh.sharedDays, 'Gemeinsamer Putztag', 'Gemeinsame Putztage'), shared)}
       ${goRow('abwesenheit', 'away', 'Abwesenheit', awayNames || 'Keine')}
@@ -1051,7 +1097,6 @@ function viewMore() {
       <div class="mrow"><span class="ic">${icon('moon', 18)}</span><span class="l">Darstellung</span><div class="seg tiny">${themes}</div></div>
     </div>
     <h2>Verwaltung</h2><div class="tile">
-      ${goRow('code', 'qr', 'Haushalts-Code')}
       ${goRow('backup', 'db', 'Backup', 'Export · Import')}
       ${goRow('start', 'flag', 'Start des Plans', fmtDate(hh.setup, true))}
     </div>
@@ -1092,15 +1137,24 @@ function viewProfile() {
 const fullNote = (action = 'new-home') => `<p class="small fullnote">Haushalt für ${S.hh.persons.length} Personen – für mehr Personen einen neuen Haushalt anlegen.</p>
     <button class="addrow fullbtn" data-action="${action}">${icon('plus', 18)}Neuen Haushalt anlegen</button>`;
 
+// Einmalig pro Person: Erst wenn alle einmal da waren, ist der Haushalt voll
+function markSeen() {
+  const field = `seen_${S.me}`;
+  if (S.hh[field]) return;
+  S.hh = { ...S.hh, [field]: S.today };
+  updateHH({ [field]: S.today });
+}
+
 function viewHousehold() {
   const rows = S.hh.persons.map((p) => (p.id === S.me
     ? `<button class="mrow" data-go="profil">${avatar(p, 'm')}<span class="l">${esc(p.name)}<small>du</small></span><span class="chev">${icon('chevron', 16)}</span></button>`
     : `<div class="mrow">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span></div>`)).join('');
-  return `<h2>Personen</h2><div class="tile">${rows}</div>
+  return `<div class="tile" style="margin-top:18px">${rows}</div>
     <span class="hint">Jede Person ändert Name und Farbe in ihrem eigenen Profil.</span>
-    <button class="addrow" data-go="code">${icon('plus', 18)}Person einladen</button>
-    ${fullNote()}
-    <h2>Gemeinsames Ziel</h2>${goalBlock(goalOf(S.hh))}`;
+    ${householdFull(S.hh)
+    ? `${fullNote()}<button class="textlink" data-go="code">Neues Handy? Code anzeigen</button>`
+    : `<button class="addrow" data-go="code">${icon('plus', 18)}Person einladen</button>
+      <button class="textlink" data-action="new-home">Mehr Personen? Neuen Haushalt anlegen</button>`}`;
 }
 
 // Meine Haushalte: Liste nur auf diesem Gerät, kostet keine Lesezugriffe. Entfernen löscht nichts in der Datenbank.
@@ -1167,11 +1221,11 @@ const setGoal = (patch) => {
 };
 
 function viewCode() {
-  return `<div class="qrwrap"><div class="qr" id="qr" aria-label="QR-Code zum Beitreten"></div>
-      <span class="small">Code</span><span class="qrcode">${formatCode(S.code)}</span>
-      <p>Zum Beitreten den QR-Code scannen oder den Code eingeben. Nicht öffentlich teilen.</p></div>
-    <div class="btnrow" style="margin-top:20px"><button class="btn" data-action="copy">Kopieren</button>${navigator.share ? '<button class="btn" data-action="share">Teilen</button>' : '<button class="btn" data-action="copy-link">Link kopieren</button>'}</div>
-    ${fullNote()}
+  return `<div class="qrwrap"><div class="qr big" id="qr" aria-label="QR-Code zum Beitreten"></div>
+      <button class="btn primary" data-action="${navigator.share ? 'share' : 'copy-link'}">Link teilen</button>
+      <span class="small invitecode">Oder Code abtippen<b>${formatCode(S.code)}</b></span>
+      <p>Nicht öffentlich teilen.</p></div>
+    ${householdFull(S.hh) ? fullNote() : ''}
     ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}`;
 }
 
@@ -1214,7 +1268,7 @@ function renderWhoAmI() {
     <h2>Wer bist du?</h2>
     <p>Einmalig pro Gerät. Deine Aufgaben stehen danach zuerst.</p>
     <div class="tile">${S.hh.persons.map((p) => `<button class="mrow" data-me="${p.id}">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span><span class="chev">${icon('chevron', 16)}</span></button>`).join('')}</div>
-    ${fullNote('new-guest')}`;
+    ${householdFull(S.hh) ? fullNote('new-guest') : ''}`;
 }
 
 // ---------- Einrichtung ----------
@@ -1541,16 +1595,23 @@ function toggle(input) {
     setTimeout(() => S.store.setCompletion(S.code, id, data), slide ? 600 : 350);
     haptic();
     const proxy = it.owner && it.owner !== S.me ? ` für ${esc(person(it.owner).name)}` : '';
-    snack(ahead ? 'Vorab erledigt.' : `Erledigt${proxy}.`, () => S.store.removeCompletion(S.code, id));
+    snack(ahead ? 'Vorab erledigt.' : `Erledigt${proxy}.`, () => undoCompletion(id));
   } else if (!reopen(id, task.title)) input.checked = true;
+}
+
+// Jeder Weg zurück läuft hier durch: merkt sich den Haken für die stille Prüfung (settleUndone)
+function undoCompletion(id, rule = false) {
+  const prev = S.comps.get(id) || S.dayComps.find((c) => c.id === id);
+  S.undone.push({ id, day: prev?.day ?? S.today, at: prev?.at, rule: rule || !!prev?.rule });
+  S.store.removeCompletion(S.code, id);
 }
 
 // Eigene Erledigung zurücknehmen (Aktuell und Plan): mit Sicherheitsabfrage, Teilschritte gleich mit
 function reopen(id, title) {
   if (!confirm(`„${title}“ wieder öffnen?`)) return false;
   const prev = S.comps.get(id) || S.dayComps.find((c) => c.id === id);
-  S.store.removeCompletion(S.code, id);
-  if (prev?.rule && prev.by === S.me) countRule(-1);
+  undoCompletion(id);
+  if (prev?.rule && prev.by === S.me) countRule(-1, id);
   const task = S.tasks.find((t) => t.id === prev?.taskId);
   (task?.steps || []).forEach((_, i) => S.store.removeCompletion(S.code, `${id}__s${i}`));
   snack('Wieder offen.');
@@ -1564,9 +1625,9 @@ function saveJoker(j) {
   updateHH({ [field]: j });
 }
 // Eigene Abmachung zählt für den Joker; true, wenn dadurch einer verdient ist
-function countRule(delta) {
+function countRule(delta, id) {
   const j = jokerOf(S.hh, S.me);
-  const next = jokerTick(j, delta);
+  const next = jokerTick(j, delta, id);
   if (next !== j) saveJoker(next);
   return next.count > j.count;
 }
@@ -1591,9 +1652,9 @@ function toggleRule(input) {
       by: S.me, at: new Date().toISOString(), day: S.today, rule: true,
     });
     haptic();
-    const earned = countRule(1);
+    const earned = countRule(1, id);
     if (earned) { celebrate('Joker verdient!', { path: MILESTONES.joker }); setTimeout(haptic, 200); }
-    snack(earned ? 'Joker verdient!' : 'Erledigt.', () => { S.store.removeCompletion(S.code, id); countRule(-1); });
+    snack(earned ? 'Joker verdient!' : 'Erledigt.', () => { undoCompletion(id, true); countRule(-1, id); });
   } else if (!reopen(id, title)) input.checked = true;
 }
 
@@ -1713,7 +1774,7 @@ function toggleStep(input) {
       taskId: task.id, title: task.title, key: it.key, slot, forPerson: it.owner,
       by: S.me, at: new Date().toISOString(), day: S.today,
     });
-    snack('Alle Teilschritte erledigt – Aufgabe erledigt.', () => S.store.removeCompletion(S.code, main));
+    snack('Alle Teilschritte erledigt – Aufgabe erledigt.', () => undoCompletion(main));
   }
 }
 

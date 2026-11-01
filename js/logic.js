@@ -390,16 +390,19 @@ export const jokerOf = (ctx, id) => ({ progress: 0, count: 0, earned: 0, deferre
 const isDeferred = (ctx, owner, id) => owner != null && !!ctx[`joker_${owner}`]?.deferred?.[id];
 
 // Eigene Abmachung erledigt (+1) oder zurückgenommen (-1). Bei vollem Vorrat zählt nichts weiter.
-export function jokerTick(j, delta) {
+// id = Erledigung: earnedBy merkt sich, welche den letzten Joker gebracht hat, sonst wäre der volle Vorrat nicht unterscheidbar.
+// Ist der Joker schon eingesetzt, bleibt die Frist; es entsteht ein Minus beim Fortschritt („noch 31 bis Joker“).
+export function jokerTick(j, delta, id = null) {
   if (delta > 0) {
     if (j.count >= JOKER_MAX) return j;
     return j.progress + 1 >= JOKER_PRICE
-      ? { ...j, progress: 0, count: j.count + 1, earned: j.earned + 1 }
+      ? { ...j, progress: 0, count: j.count + 1, earned: j.earned + 1, earnedBy: id }
       : { ...j, progress: j.progress + 1 };
   }
   if (j.progress > 0) return { ...j, progress: j.progress - 1 };
-  if (j.count === 0 || j.count >= JOKER_MAX) return j;
-  return { ...j, progress: JOKER_PRICE - 1, count: j.count - 1, earned: Math.max(0, j.earned - 1) };
+  if (j.count >= JOKER_MAX && (!id || id !== j.earnedBy)) return j;
+  if (j.count === 0) return j.earned > 0 ? { ...j, progress: j.progress - 1 } : j;
+  return { ...j, progress: JOKER_PRICE - 1, count: j.count - 1, earned: Math.max(0, j.earned - 1), earnedBy: null };
 }
 
 // Joker möglich? Offen, mit Person, nicht Tägliches oder Bei Bedarf, und die neue Frist liegt nicht schon hinter uns.
@@ -714,6 +717,11 @@ export function dueBetween(tasks, ctx, fromStr, toStr, doneById, me) {
   return out;
 }
 
+// ---------- Personen ----------
+
+// Voll: Alle Personen stehen beim Anlegen fest, voll ist der Haushalt also erst, wenn jede schon auf einem Gerät war (seen_<id>).
+export const householdFull = (ctx) => ctx.persons.every((p) => !!ctx[`seen_${p.id}`]);
+
 // ---------- Personenfarben ----------
 
 // Reihenfolge nach Farbverlauf, Vorschlag je Person möglichst weit auseinander
@@ -789,6 +797,38 @@ export function goalResult(tasks, ctx, todayStr, doneById) {
   const s = goalStats(tasks, ctx, month, doneById);
   if (!s.total) return null;
   return { month, ...s, reached: s.done * 100 >= goalOf(ctx).percent * s.total, settled: todayStr > s.lastEnd };
+}
+
+// Rückgängig: Monate mit erreichtem Ziel, die der Haken vom Tag `day` betreffen kann und jetzt nicht mehr reichen.
+// Ohne Änderung kommt dieselbe Liste zurück. Monate vor einem neu eingerichteten Plan bleiben.
+export function revokeGoalHits(hits, tasks, ctx, day, doneById) {
+  const index = (s) => { const [y, m] = s.split('-').map(Number); return y * 12 + m; };
+  const percent = goalOf(ctx).percent;
+  const stale = Object.keys(hits).filter((month) => {
+    if (Math.abs(index(month) - index(day)) > 1) return false;
+    const [y, m] = month.split('-').map(Number);
+    if (dayOf(y, m + 1, 1) - 1 - toDay(ctx.setup) < 13) return false;
+    const s = goalStats(tasks, ctx, month, doneById);
+    return s.total > 0 && s.done * 100 < percent * s.total;
+  });
+  return stale.length ? Object.fromEntries(Object.entries(hits).filter(([month]) => !stale.includes(month))) : hits;
+}
+
+// Rückgängig: Meilensteine, die auf dieser Art von Haken beruhen. Was vor dem Tag des Hakens erreicht wurde, hing nicht
+// an ihm; so bleibt auch Erreichtes aus einem früheren Plan. now = was laut Daten gerade stimmt, longest = gerechnete Serie.
+const MILESTONE_BASIS = { rule: ['extra100', 'joker'], task: ['first', 'week', 'week4', 'month', 'tasks100', 'goal'] };
+export function revokeStats(st, undone, { now, longest, started, setup }) {
+  const stale = MILESTONE_BASIS[undone.rule ? 'rule' : 'task'].filter((id) => st.done[id] >= undone.day && !now[id]);
+  const series = stale.includes('week') || stale.includes('week4') || st.longestDay >= undone.day;
+  const lower = series && longest < st.longest;
+  const unstart = !undone.rule && st.start === setup && !started;
+  if (!stale.length && !lower && !unstart) return st;
+  return {
+    ...st,
+    done: Object.fromEntries(Object.entries(st.done).filter(([id]) => !stale.includes(id))),
+    longest: lower ? longest : st.longest,
+    start: unstart ? null : st.start,
+  };
 }
 
 // Serie in Wochen: eigene Woche ab dem Putztag, zählt, wenn alle eigenen Termine darin erledigt sind.
