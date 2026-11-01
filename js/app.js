@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.48';
+const APP_VERSION = '2.0.49';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -367,7 +367,7 @@ const PAGES = {
   pause: ['Haushalt pausieren', () => viewPause()],
   ziel: ['Gemeinsames Ziel', () => `<h2>Monatsziel</h2>${goalBlock(goalOf(S.hh))}`],
   haushalte: ['Meine Haushalte', () => viewHomes()],
-  code: ['Person einladen', () => viewCode()],
+  code: ['Link oder QR teilen', () => viewCode()],
   aufgaben: ['Aufgabenliste', () => viewTasks()],
   abmachungen: ['Abmachungen', () => viewRules()],
   putztag: [() => putztagWord(S.hh.sharedDays, 'Gemeinsamer Putztag', 'Gemeinsame Putztage'), () => viewSharedDay()],
@@ -1122,9 +1122,9 @@ function viewProfile() {
     <span class="hint">Ein oder mehrere Tage, an denen deine Aufgaben dran sind.</span>`;
 }
 
-// Die Personenzahl steht beim Anlegen fest. action: new-home meldet den Wechsel an den alten Haushalt, new-guest nicht
-const fullNote = (action = 'new-home') => `<p class="small fullnote">Haushalt für ${S.hh.persons.length} Personen – für mehr Personen einen neuen Haushalt anlegen.</p>
-    <button class="addrow fullbtn" data-action="${action}">${icon('plus', 18)}Neuen Haushalt anlegen</button>`;
+// „Wer bist du?“ bei vollem Haushalt: für neue Personen. Bestehende wählen sich einfach aus der Liste.
+const fullNote = () => `<p class="small fullnote">Haushalt für ${S.hh.persons.length} Personen – für mehr Personen einen neuen Haushalt anlegen.</p>
+    <button class="addrow fullbtn" data-action="new-guest">${icon('plus', 18)}Neuen Haushalt anlegen</button>`;
 
 // Einmalig pro Person: Erst wenn alle einmal da waren, ist der Haushalt voll
 function markSeen() {
@@ -1140,10 +1140,9 @@ function viewHousehold() {
     : `<div class="mrow">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span></div>`)).join('');
   return `<div class="tile" style="margin-top:18px">${rows}</div>
     <span class="hint">Jede Person ändert Name und Farbe in ihrem eigenen Profil.</span>
-    ${householdFull(S.hh)
-    ? `${fullNote()}<button class="textlink" data-go="code">Neues Handy? Code anzeigen</button>`
-    : `<button class="addrow" data-go="code">${icon('plus', 18)}Person einladen</button>
-      <button class="textlink" data-action="new-home">Mehr Personen? Neuen Haushalt anlegen</button>`}`;
+    <div class="tile" style="margin-top:22px">${goRow('code', 'qr', 'Link oder QR teilen')}</div>
+    <span class="hint">Für Personen im Haushalt oder ein neues Handy</span>
+    <button class="addrow" data-action="add-person">${icon('plus', 18)}Person</button>`;
 }
 
 // Meine Haushalte: Liste nur auf diesem Gerät, kostet keine Lesezugriffe. Entfernen löscht nichts in der Datenbank.
@@ -1172,8 +1171,9 @@ async function switchHome(code) {
   await keepIdentity();
   location.replace(location.pathname);
 }
-function newHome() {
-  if (!confirm('Neuen Haushalt anlegen?\n\nIhr beginnt bei null: neue Aufgaben, neuer Verlauf, neue Statistik. Der alte Haushalt bleibt erhalten, du findest ihn unter Mehr › Meine Haushalte.')) return;
+const ADD_PERSON = 'Eine neue Person heißt neuer Haushalt: Namen und Aufgaben gebt ihr neu ein, die Aufteilung wird neu berechnet. Statistik, Serie und Joker-Stand kommen nicht mit, alle müssen in den neuen Haushalt wechseln. Der alte Haushalt bleibt erhalten. Weiter?';
+function newHome(question = 'Neuen Haushalt anlegen?\n\nIhr beginnt bei null: neue Aufgaben, neuer Verlauf, neue Statistik. Der alte Haushalt bleibt erhalten, du findest ihn unter Mehr › Meine Haushalte.') {
+  if (!confirm(question)) return;
   const from = S.code;
   startSetup();
   Object.assign(S.setup, { step: 'persons', from });
@@ -1216,7 +1216,6 @@ const inviteView = () => `<div class="qrwrap"><div class="qr big" id="qr" aria-l
 
 function viewCode() {
   return `${inviteView()}
-    ${householdFull(S.hh) ? fullNote() : ''}
     ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}`;
 }
 
@@ -1268,7 +1267,7 @@ function renderWhoAmI() {
     <h2>Wer bist du?</h2>
     <p>Einmalig pro Gerät. Deine Aufgaben stehen danach zuerst.</p>
     <div class="tile">${S.hh.persons.map((p) => `<button class="mrow" data-me="${p.id}">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span><span class="chev">${icon('chevron', 16)}</span></button>`).join('')}</div>
-    ${householdFull(S.hh) ? fullNote('new-guest') : ''}`;
+    ${householdFull(S.hh) ? fullNote() : ''}`;
 }
 
 // ---------- Einrichtung ----------
@@ -1894,6 +1893,7 @@ app.addEventListener('click', (e) => {
       return;
     case 'pause-end': return updateHH({ pauses: endPause(S.hh.pauses, S.today) });
     case 'new-home': return newHome();
+    case 'add-person': return newHome(ADD_PERSON);
     case 'new-guest': return newGuestHome();
     case 'move-go': return void switchHome(S.hh.movedTo);
     case 'move-stay': ls.set('moved-stay', S.hh.movedTo); return render();
