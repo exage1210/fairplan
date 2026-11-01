@@ -7,7 +7,7 @@ import {
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
   personalWeek, isPressing, goalOf, goalStats, goalResult,
   jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX, PACKAGES, isPackage, swapsByRound, upsertHome,
-  nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull,
+  nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull, colorName, colorLabel,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -1049,4 +1049,11 @@ test('Haushalt voll: erst wenn jede Person einmal da war', () => {
   assert.equal(householdFull(ctx()), false);
   assert.equal(householdFull(ctx({ seen_p1: '2026-11-01' })), false);
   assert.equal(householdFull(ctx({ seen_p1: '2026-11-01', seen_p2: '2026-11-02' })), true);
+});
+
+test('Farbnamen: sichtbar die Farbe, für Screenreader Farbe und Tier, alle 8 vollständig', () => {
+  assert.equal(colorName('koralle'), 'Koralle');
+  assert.equal(colorLabel('koralle'), 'Koralle (Krabbe)');
+  assert.equal(colorLabel('tuerkis'), 'Türkis (Schildkröte)');
+  for (const c of PALETTE) assert.match(colorLabel(c), /^\S+ \(\S+\)$/);
 });
