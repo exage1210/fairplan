@@ -5,6 +5,7 @@ import {
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
   PACKAGES, MAX_PERSONS, isPackage, swapsByRound, upsertHome,
   goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE,
+  nextRounds, migrateColors, suggestColor,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED, GOAL_REWARDS } from './template.js';
@@ -12,8 +13,8 @@ import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS,
 // ---------- Konstanten & Hilfen ----------
 
 const COLORS = [
-  ['blau', 'Blau'], ['rosa', 'Rosa'], ['gelb', 'Gelb'],
-  ['gruen', 'Grün'], ['violett', 'Violett'], ['orange', 'Orange'],
+  ['koralle', 'Koralle'], ['orange', 'Orange'], ['senf', 'Senf'], ['gruen', 'Grün'],
+  ['tuerkis', 'Türkis'], ['blau', 'Blau'], ['violett', 'Violett'], ['rosa', 'Rosa'],
 ];
 const KIND_LABEL = {
   daily: 'Täglich', weekly: 'Wöchentlich', biweekly: 'Alle 2 Wochen', monthly: 'Monatlich',
@@ -34,7 +35,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.43';
+const APP_VERSION = '2.0.44';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -63,9 +64,11 @@ const icon = (name, size = 24) => `<svg width="${size}" height="${size}" viewBox
 const ANIMALS = {
   blau: { name: 'Wal', fill: 'M3 13.5C3 10 6.5 8.5 10.5 8.5c3.8 0 6 1.7 7.2 3.6L21.5 9.5V16l-3.6-1.6C16.6 16.6 14 18 10.5 18 6 18 3 16.5 3 13.5z', stroke: 'M10.5 7.5V5M8 4.6c1 .1 1.8.6 2.5 1.4.7-.8 1.5-1.3 2.5-1.4', eyes: 'M6 12.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
   rosa: { name: 'Flamingo', fill: 'M9.6 5.2a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0zM10.2 5.6L3.8 8.4l6.8-1.1z', stroke: 'M14.2 5.6c3 .6 3.4 4 1 6.6-2.4 2.6-3.8 4.6-3.4 8.3', eyes: 'M11.6 4.8a.75 .75 0 1 0 1.5 0a.75 .75 0 1 0-1.5 0z', detail: '' },
-  gelb: { name: 'Küken', fill: 'M5 14.2a7 7 0 1 0 14 0a7 7 0 1 0-14 0z', stroke: 'M12 7.2V4.6c0-1.2 1.8-1.2 1.8 0', eyes: 'M8.9 12.7a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM13.3 12.7a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM10.8 15h2.4L12 16.9z', detail: '' },
+  senf: { name: 'Biene', fill: 'M3.6 14.6a7.6 5 0 1 0 15.2 0a7.6 5 0 1 0-15.2 0z', stroke: 'M9.8 9.2C8.6 6.6 9 4 10.8 3.8c1.8-.2 2.4 2.7 1.5 5.4M13.6 9.4c.5-2.3 2.1-4.1 3.7-3.5 1.5.6.9 3.1-1.3 4.1M19.4 14.6h2', eyes: 'M6 13.5a.95 .95 0 1 0 1.9 0a.95 .95 0 1 0-1.9 0z', detail: 'M10.6 10v9.2M14.6 10.4v8.4' },
   gruen: { name: 'Frosch', fill: 'M3 15.2c0-3.3 3.6-5.4 9-5.4s9 2.1 9 5.4-3.6 5-9 5-9-1.7-9-5zM4.8 8.6a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0zM13.6 8.6a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0-5.6 0z', stroke: '', eyes: 'M6.5 8.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0zM15.3 8.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0z', detail: 'M9 15.6c1.8 1.3 4.2 1.3 6 0' },
-  violett: { name: 'Qualle', fill: 'M5 12.5a7 7 0 0 1 14 0z', stroke: 'M7.6 15c-.7 1.6.7 2.5 0 4.2M10.5 15c-.7 1.6.7 2.6 0 4.6M13.5 15c-.7 1.6.7 2.6 0 4.6M16.4 15c-.7 1.6.7 2.5 0 4.2', eyes: 'M9.4 10a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM12.8 10a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0z', detail: '' },
+  violett: { name: 'Oktopus', fill: 'M5.5 10.6a6.5 6.5 0 0 1 13 0v2.4c0 1-.8 1.6-1.8 1.6H7.3c-1 0-1.8-.6-1.8-1.6z', stroke: 'M6.8 14c-.3 2.3-1.5 3.8-3.4 4.2M10 14.6c0 2.5-.8 4.4-2.5 5.6M14 14.6c0 2.5.8 4.4 2.5 5.6M17.2 14c.3 2.3 1.5 3.8 3.4 4.2', eyes: 'M8.5 9.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0zM13.5 9.6a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
+  koralle: { name: 'Krabbe', fill: 'M5.4 15a6.6 4.8 0 1 0 13.2 0a6.6 4.8 0 1 0-13.2 0zM1.8 5.2a2 2 0 1 0 4 0a2 2 0 1 0-4 0zM18.2 5.2a2 2 0 1 0 4 0a2 2 0 1 0-4 0z', stroke: 'M6.4 11.6C4.6 10.4 3.8 8.6 3.8 6M17.6 11.6c1.8-1.2 2.6-3 2.6-5.6M5.8 18.4l-2.6 2M18.2 18.4l2.6 2', eyes: 'M8.6 13.8a1 1 0 1 0 2 0a1 1 0 1 0-2 0zM13.4 13.8a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: 'M10 16.6c1.2.8 2.8.8 4 0' },
+  tuerkis: { name: 'Schildkröte', fill: 'M3.4 15.6a7.8 7.8 0 0 1 15.6 0zM17.8 12.2a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0z', stroke: 'M6.8 16.4v2.4M15.6 16.4v2.4M3.4 15.8l-1.6.9', eyes: 'M20.1 11.6a.75 .75 0 1 0 1.5 0a.75 .75 0 1 0-1.5 0z', detail: 'M6.8 15.4l2.4-3.6h3.8l2.4 3.6M9.2 11.8l1-3.2M13 11.8l-1-3.2' },
   orange: { name: 'Fuchs', fill: 'M3.8 4.5l5.2 4h6l5.2-4-.6 9.4L12 20.8 4.4 13.9z', stroke: '', eyes: 'M8.6 12.2a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM13.6 12.2a.9 .9 0 1 0 1.8 0a.9 .9 0 1 0-1.8 0zM11 16.4a1 1 0 1 0 2 0a1 1 0 1 0-2 0z', detail: '' },
 };
 const animalSvg = (color) => {
@@ -244,7 +247,7 @@ function connect(code) {
   S.subs.forEach((u) => u());
   S.subs = [
     S.store.watchHousehold(code, (hh) => {
-      S.hh = hh ? { ...DEFAULT_HOUSEHOLD, ...hh } : null;
+      S.hh = hh ? { ...DEFAULT_HOUSEHOLD, ...hh, persons: migrateColors(hh.persons || []) } : null;
       refreshCompletions();
       render();
     }),
@@ -273,7 +276,7 @@ function refreshCompletions() {
   if (sig === S.compSig) return;
   S.compSig = sig;
   S.compSub?.();
-  S.compSub = S.store.watchCompletions(S.code, keys, (m) => { S.comps = m; render(); });
+  S.compSub = S.store.watchCompletions(S.code, keys, (m) => { S.comps = m; S.compsReady = true; render(); });
 }
 
 // Erledigungen ab einem Tag laden; der Bereich wächst nur (spart Lesezugriffe).
@@ -451,7 +454,7 @@ const swipeRow = ({ done, locked, off, by, check, body }) => `<div class="swipe"
   </div>`;
 
 // Zeile für „Aktuell“: Intervall klein rechts, Zusatzzeile für Hinweis, Termin oder „Gemeinsam“
-function nowRow(it, sub = '') {
+function nowRow(it, sub = '', ahead = false) {
   const t = it.task, k = kindOf(t);
   const iv = k === 'custom' ? `alle ${t.n} ${UNIT_LABEL[t.unit][t.n === 1 ? 0 : 1]}` : SHORT_KIND[k];
   const done = it.status === 'done';
@@ -464,10 +467,10 @@ function nowRow(it, sub = '') {
     ? `<button class="jokerbtn" data-action="joker" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}">Joker: 1 Woche später</button>` : '';
   return swipeRow({
     done, locked, off, by,
-    check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}"
+    check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}" ${ahead ? `data-key="${esc(it.key)}"` : ''}
       ${done ? 'checked' : ''} ${off || locked ? 'disabled' : ''} aria-label="${esc(t.title)} erledigt">`,
     body: `<div class="body"><div class="head"><span class="title">${esc(t.title)}</span><span class="kind">${iv}</span></div>
-      ${extra ? `<div class="meta">${extra}</div>` : ''}${stepsBlock(it)}${joker}</div>`,
+      ${extra ? `<div class="meta">${extra}</div>` : ''}${ahead ? '' : stepsBlock(it)}${joker}</div>`,
   });
 }
 
@@ -604,6 +607,11 @@ function viewToday() {
   const away = S.hh.away?.[S.me];
   const meAway = away?.from && away.from <= S.today && S.today <= away.to;
   const allDone = !now.length && x > 0;
+  // Ruhige Karte: nichts Fälliges offen, aber es gibt eigene Aufgaben und der Plan läuft
+  const calm = !now.length && !meAway && S.today >= S.hh.setup && items.some((i) => mineItem(i) && kindOf(i.task) !== 'asneeded');
+  const ahead = calm ? nextRounds(S.tasks, S.hh, S.me, S.today, doneMap()) : [];
+  const aheadIds = new Set(ahead.map((i) => completionId(i.task.id, i.key, i.slot)));
+  const inAhead = (i) => i.key && aheadIds.has(completionId(i.task.id, i.key, i.slot));
   const me = person(S.me);
   const swap = nextSwap(S.hh, S.today);
   const goal = goalOf(S.hh);
@@ -619,14 +627,14 @@ function viewToday() {
       <span class="card-open">${meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.` : allDone ? 'Alles erledigt – stark gemacht!' : pressing.length ? `Noch ${pressing.length} offen` : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.'}</span>
       ${S.today < S.hh.setup ? `<span class="card-next">Euer Plan startet am ${fmtDate(S.hh.setup, true)}</span>` : ''}
       ${goalNow.total ? `<span class="card-next">Gemeinsam: ${goalNow.percent} % von ${goal.percent} %${goal.reward ? ` · ${esc(goal.reward)}` : ''}</span>` : ''}
-      ${next ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
+      ${next && !ahead.length ? `<span class="card-next">Als Nächstes: ${esc(next.title)}, ab ${dayLabel(next.date)}</span>` : ''}
       ${swap && toDay(swap) - toDay(S.today) <= 3 ? `<span class="card-next">Tausch am ${fmtDate(swap)}</span>` : ''}
       <hr>
       <div class="duo"><div><span>Deine Woche</span><b>${weekCount} erledigt</b></div>
         <div><span>Serie</span><b>${current ? `${streakText} in Folge` : streakText}</b></div></div>
     </section>
-    ${allDone && !meAway ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${starSvg(`var(--c-${me.color})`, !S.cheered)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
-  S.cheered = allDone; // Stern nur beim ersten Mal zeichnen, nicht bei jedem Neuzeichnen
+    ${calm ? `<section class="cheer ${S.cheered ? '' : 'pop'}">${starSvg(`var(--c-${me.color})`, !S.cheered)}<b>Alles erledigt</b><span>Genieß den Tag.</span></section>` : ''}`;
+  if (S.compsReady) S.cheered = calm; // Stern nur zeichnen, wenn gerade alles erledigt wurde, nicht beim Öffnen oder Neuzeichnen
 
   const rows = (list, sub = whenText) => `<div class="list">${list.map((i) => nowRow(i, sub(i))).join('')}</div>`;
   const head = (name, n, cls = '') => `${name} <span class="count ${cls}">${n}</span>`;
@@ -639,15 +647,23 @@ function viewToday() {
 
   const doneRows = [
     ...doneRules.map((r) => [0, ruleRow(r)]),
-    ...doneToday.map((i) => [kindRank(i.task), nowRow(i, doneText(i))]),
+    ...doneToday.filter((i) => !inAhead(i)).map((i) => [kindRank(i.task), nowRow(i, doneText(i))]),
   ].sort((a, b) => a[0] - b[0]).map((r) => r[1]).join('');
 
+  // Als Nächstes ersetzt bei der ruhigen Karte die eigenen kommenden Aufgaben; eingeklappt, wenn nichts ansteht
+  const list = tasks.filter((i) => !inAhead(i));
+  const aheadOpen = ahead.filter((i) => i.status !== 'done').length;
+  const aheadBlock = !calm ? '' : ahead.length
+    ? fold('ahead', head('Als Nächstes', aheadOpen), `<p class="small">Schon früher fertig? Der Haken gilt für die nächste Runde.</p><div class="list">${ahead.map((i) => nowRow(i, i.status === 'done' ? `vorab erledigt von ${byWho(i.completion.by)} · für ${dayLabel(i.due)}` : `${dayLabel(i.due)}, bis ${dayLabel(i.end)}`, true)).join('')}</div>`, true)
+    : `<details class="fold" data-fold="ahead-empty"><summary>${head('Als Nächstes', 0)}</summary><p class="small">In den nächsten 7 Tagen steht nichts an.</p></details>`;
+
   return `${card}
+    ${aheadBlock}
     ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} extra</span>` : ''}`, `<p class="small">Erledigt ihr nebenbei, so wie abgemacht. Wird nicht aufgeteilt, zählt aber in deiner Statistik.</p><div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
-    ${fold('tasks', head('Aufgaben', tasks.length), rows(tasks), true)}
+    ${list.length || !calm ? fold('tasks', head('Aufgaben', list.length), rows(list), true) : ''}
     ${need.length ? fold('need', head('Bei Bedarf', need.length), `<p class="small">Taucht nur auf, wenn ihr es braucht.</p>${rows(need, () => '')}`) : ''}
     ${others}
-    ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.length), `<div class="list">${doneRows}</div>`) : ''}`;
+    ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.filter((i) => !inAhead(i)).length), `<div class="list">${doneRows}</div>`) : ''}`;
 }
 
 const doneText = (it) => `erledigt von ${byWho(it.completion.by)}${forWhom(it.completion)} · ${timeOf(it.completion)}`;
@@ -851,17 +867,26 @@ const MILESTONES = {
 // Erfolgssymbol: Stern als Linie, zeichnet sich auf Wunsch
 const starSvg = (stroke, draw = true, path = MILESTONES.star) => `<svg class="star ${draw ? 'draw' : ''}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path pathLength="1" d="${path}"></path></svg>`;
 
-// Kurz einblenden (unter 1,5 s), Antippen schließt
-function celebrate(text, { colors = [person(S.me)?.color], path } = {}) {
+// Kurz einblenden (sonst 1,4 s), Antippen schließt
+function celebrate(text, { colors = [person(S.me)?.color], path, ms = 1400 } = {}) {
   $('#fx')?.remove();
   const el = document.createElement('button');
   el.id = 'fx';
   const grad = colors.length > 1
     ? `<svg width="0" height="0" style="position:absolute"><linearGradient id="fxg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--c-${colors[0]})"/><stop offset="1" style="stop-color:var(--c-${colors[1]})"/></linearGradient></svg>` : '';
   el.innerHTML = `${grad}${starSvg(colors.length > 1 ? 'url(#fxg)' : `var(--c-${colors[0]})`, true, path)}<b>${esc(text)}</b>`;
+  el.style.animationDuration = `${ms}ms`;
   el.onclick = () => el.remove();
   document.body.append(el);
-  setTimeout(() => el.remove(), 1400);
+  setTimeout(() => el.remove(), ms);
+}
+
+// Erster Aufgaben-Haken des Tages: Stern etwas länger, einmal pro Tag und Gerät. Beim allerersten Haken eines Plans kommt „Der Anfang ist gemacht!“.
+function dayStar() {
+  if (!S.daysReady || ls.get('star-day') === S.today || statsOf(S.me).start !== S.hh.setup) return;
+  if (S.dayComps.some((c) => c.by === S.me && c.day === S.today && !c.rule)) return;
+  ls.set('star-day', S.today);
+  celebrate('Guter Start!', { ms: matchMedia('(prefers-reduced-motion: reduce)').matches ? 800 : 1800 });
 }
 
 // Meilensteine: persönlich, einmal erreicht bleibt erreicht (stats_<id> im Haushalt: { longest, done: { id: Tag }, start })
@@ -888,7 +913,7 @@ const milestones = whenChanged(() => {
     ['tasks100', '100 Aufgaben', tasks.length >= 100, left(tasks.length, 100), MILESTONES.cup],
     ['extra100', '100 extra', rules.length >= 100, left(rules.length, 100), MILESTONES.star],
     ['joker', 'Erster Joker', joker.earned >= 1, `noch ${JOKER_PRICE - joker.progress}`, MILESTONES.joker],
-    ['goal', 'Gemeinsames Ziel', goals >= 1, 'läuft', MILESTONES.star],
+    ['goal', 'Gemein\u00ADsames Ziel', goals >= 1, 'läuft', MILESTONES.star],
   ].map(([id, name, on, open, path]) => ({ id, name, on: on || !!st.done[id], sub: id === 'goal' && goals ? `${goals}× geschafft` : on || st.done[id] ? 'geschafft' : open, path }));
   return { list, best, current, tasks };
 });
@@ -1041,7 +1066,7 @@ const sharedDaysOf = (hh) => (hh.sharedDays?.length ? hh.sharedDays : [5]);
 // Farbwahl wie im Profil: Tier in der Farbe, bereits vergebene ausgegraut
 const colorGrid = (current, takenBy, attr) => `<div class="colors">${COLORS.map(([c, l]) => {
   const owner = takenBy(c);
-  return `<button ${attr} data-color="${c}" data-c="${c}" aria-pressed="${current === c}" ${owner ? 'disabled' : ''} aria-label="${l}${owner?.name ? `, vergeben an ${esc(owner.name)}` : ''}">${animalSvg(c)}<span>${l}${owner ? '<small>vergeben</small>' : ''}</span></button>`;
+  return `<button ${attr} data-color="${c}" data-c="${c}" aria-pressed="${current === c}" ${owner ? 'disabled' : ''} aria-label="${l}, ${ANIMALS[c].name}${owner?.name ? `, vergeben an ${esc(owner.name)}` : ''}">${animalSvg(c)}<span>${l}${owner ? '<small>vergeben</small>' : ''}</span></button>`;
 }).join('')}</div>`;
 
 function viewProfile() {
@@ -1063,6 +1088,10 @@ function viewProfile() {
     <span class="hint">Ein oder mehrere Tage, an denen deine Aufgaben dran sind.</span>`;
 }
 
+// Die Personenzahl steht beim Anlegen fest. action: new-home meldet den Wechsel an den alten Haushalt, new-guest nicht
+const fullNote = (action = 'new-home') => `<p class="small fullnote">Haushalt für ${S.hh.persons.length} Personen – für mehr Personen einen neuen Haushalt anlegen.</p>
+    <button class="addrow fullbtn" data-action="${action}">${icon('plus', 18)}Neuen Haushalt anlegen</button>`;
+
 function viewHousehold() {
   const rows = S.hh.persons.map((p) => (p.id === S.me
     ? `<button class="mrow" data-go="profil">${avatar(p, 'm')}<span class="l">${esc(p.name)}<small>du</small></span><span class="chev">${icon('chevron', 16)}</span></button>`
@@ -1070,10 +1099,8 @@ function viewHousehold() {
   return `<h2>Personen</h2><div class="tile">${rows}</div>
     <span class="hint">Jede Person ändert Name und Farbe in ihrem eigenen Profil.</span>
     <button class="addrow" data-go="code">${icon('plus', 18)}Person einladen</button>
-    <h2>Gemeinsames Ziel</h2>${goalBlock(goalOf(S.hh))}
-    <h2>Mehr oder weniger Personen?</h2>
-    <p class="small">Dafür legt ihr einen neuen Haushalt an und beginnt bei null. Der alte bleibt erhalten.</p>
-    <button class="addrow" data-action="new-home">${icon('plus', 18)}Neuen Haushalt anlegen</button>`;
+    ${fullNote()}
+    <h2>Gemeinsames Ziel</h2>${goalBlock(goalOf(S.hh))}`;
 }
 
 // Meine Haushalte: Liste nur auf diesem Gerät, kostet keine Lesezugriffe. Entfernen löscht nichts in der Datenbank.
@@ -1110,6 +1137,13 @@ function newHome() {
   window.scrollTo(0, 0);
   renderSetup();
 }
+// Gast bei „Wer bist du?“: eigener neuer Haushalt, der fremde bekommt davon nichts mit
+function newGuestHome() {
+  startSetup();
+  Object.assign(S.setup, { step: 'persons', guest: true });
+  window.scrollTo(0, 0);
+  renderSetup();
+}
 // Im alten Haushalt: Hinweis auf den neuen, einmal wegtippbar
 function movedNote() {
   const to = S.hh.movedTo;
@@ -1137,6 +1171,7 @@ function viewCode() {
       <span class="small">Code</span><span class="qrcode">${formatCode(S.code)}</span>
       <p>Zum Beitreten den QR-Code scannen oder den Code eingeben. Nicht öffentlich teilen.</p></div>
     <div class="btnrow" style="margin-top:20px"><button class="btn" data-action="copy">Kopieren</button>${navigator.share ? '<button class="btn" data-action="share">Teilen</button>' : '<button class="btn" data-action="copy-link">Link kopieren</button>'}</div>
+    ${fullNote()}
     ${S.store.mode === 'local' ? '<p class="small"><span class="ov">Lokaler Testmodus:</span> config.js ist nicht befüllt, Daten liegen nur auf diesem Gerät.</p>' : ''}`;
 }
 
@@ -1178,7 +1213,8 @@ function renderWhoAmI() {
   app.innerHTML = `<header class="top">${LOGO}</header>
     <h2>Wer bist du?</h2>
     <p>Einmalig pro Gerät. Deine Aufgaben stehen danach zuerst.</p>
-    <div class="tile">${S.hh.persons.map((p) => `<button class="mrow" data-me="${p.id}">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span><span class="chev">${icon('chevron', 16)}</span></button>`).join('')}</div>`;
+    <div class="tile">${S.hh.persons.map((p) => `<button class="mrow" data-me="${p.id}">${avatar(p, 'm')}<span class="l">${esc(p.name)}</span><span class="chev">${icon('chevron', 16)}</span></button>`).join('')}</div>
+    ${fullNote('new-guest')}`;
 }
 
 // ---------- Einrichtung ----------
@@ -1193,7 +1229,7 @@ function startSetup(reset = false) {
       shared: S.hh.sharedDays?.length ? S.hh.sharedDays : [5], start: S.today, goal: goalOf(S.hh),
       rotate: S.hh.rotateFrom !== null, // null = bewusst ausgeschaltet, fehlt = noch nie entschieden
       rules: (S.hh.rules || []).map((r) => RULE_RENAMED[r] || r).filter((r) => RULE_SUGGESTIONS.includes(r)), tasks: [], planRules: [], ...PICK_START, error: '' }
-    : { step: 'start', persons: [{ name: '', color: 'violett', days: [5] }, { name: '', color: 'gruen', days: [5] }],
+    : { step: 'start', persons: [{ name: '', color: suggestColor([]), days: [5] }, { name: '', color: suggestColor([suggestColor([])]), days: [5] }],
       shared: [5], start: S.today, goal: goalOf({}), rotate: true, rules: [], tasks: [], planRules: [], ...PICK_START, error: '' };
   renderSetup();
 }
@@ -1272,7 +1308,7 @@ function renderSetup() {
       <section class="tile setup-person"><h2 style="margin-top:0">${putztagWord(st.shared, 'Gemeinsamer Putztag', 'Gemeinsame Putztage')}</h2>${dayChips(st.shared, 'data-setup-shared')}
         <span class="hint">Ein oder mehrere Tage, später im Profil und unter „Mehr“ änderbar.</span></section>
       ${err}
-      <div class="btnrow"><button class="btn" data-setup="${st.reset || st.from ? 'cancel' : 'start'}">${st.reset || st.from ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
+      <div class="btnrow"><button class="btn" data-setup="${st.reset || st.from || st.guest ? 'cancel' : 'start'}">${st.reset || st.from || st.guest ? 'Abbrechen' : 'Zurück'}</button><button class="btn primary" data-setup="template">Weiter</button></div>`;
   } else if (st.step === 'template') {
     // Die Vorschläge sind auf 2 Personen geschätzt
     body = `<h2>Vorlage</h2>
@@ -1487,22 +1523,25 @@ function toggle(input) {
   const task = S.tasks.find((t) => t.id === input.dataset.task);
   if (!task) return;
   const slot = input.dataset.slot || null;
-  const it = evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
+  // Als Nächstes: der Schlüssel steht in der Zeile, die Runde gehört der Person selbst
+  const ahead = input.dataset.key;
+  const it = ahead ? { key: ahead, owner: S.me } : evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
   if (!it?.key) return;
   const id = completionId(task.id, it.key, slot);
   if (input.checked) {
+    dayStar();
     const data = {
       taskId: task.id, title: task.title, key: it.key, slot, forPerson: it.owner,
       by: S.me, at: new Date().toISOString(), day: S.today,
     };
     const row = input.closest('.item');
     row.classList.add('checking');
-    const slide = S.view === 'heute';
+    const slide = S.view === 'heute' && !ahead;
     if (slide) setTimeout(() => row.classList.add('leaving'), 350);
     setTimeout(() => S.store.setCompletion(S.code, id, data), slide ? 600 : 350);
     haptic();
     const proxy = it.owner && it.owner !== S.me ? ` für ${esc(person(it.owner).name)}` : '';
-    snack(`Erledigt${proxy}.`, () => S.store.removeCompletion(S.code, id));
+    snack(ahead ? 'Vorab erledigt.' : `Erledigt${proxy}.`, () => S.store.removeCompletion(S.code, id));
   } else if (!reopen(id, task.title)) input.checked = true;
 }
 
@@ -1734,8 +1773,7 @@ app.addEventListener('click', (e) => {
   if (d.setupCount) {
     const list = S.setup.persons.slice(0, +d.setupCount);
     while (list.length < +d.setupCount) {
-      const color = ['violett', 'gruen', 'blau', 'rosa', 'gelb', 'orange'].find((c) => !list.some((p) => p.color === c));
-      list.push({ name: '', color, days: [5] });
+      list.push({ name: '', color: suggestColor(list.map((p) => p.color)), days: [5] });
     }
     S.setup.persons = list;
     return renderSetup();
@@ -1799,6 +1837,7 @@ app.addEventListener('click', (e) => {
       Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});
       return;
     case 'new-home': return newHome();
+    case 'new-guest': return newGuestHome();
     case 'move-go': return void switchHome(S.hh.movedTo);
     case 'move-stay': ls.set('moved-stay', S.hh.movedTo); return render();
     case 'leave':
@@ -1849,7 +1888,7 @@ function setupAction(a) {
   } else if (a === 'join') return joinHousehold();
   else if (a === 'cancel') { S.setup = null; return render(); }
   else if (a === 'done') {
-    if (st.from) { location.replace(location.pathname); return; } // neu laden, nichts vom alten Haushalt mitnehmen
+    if (st.from || st.guest) { location.replace(location.pathname); return; } // neu laden, nichts vom alten Haushalt mitnehmen
     S.setup = null; connect(S.code); return;
   }
   window.scrollTo(0, 0);

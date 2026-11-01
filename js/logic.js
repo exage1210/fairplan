@@ -665,6 +665,35 @@ export function windowsBetween(task, ctx, fromStr, toStr) {
   return out;
 }
 
+// Vorher abhaken: die nächste Runde eigener Aufgaben in den kommenden Tagen, je Aufgabe und Slot höchstens eine.
+// Nur eigene, ohne Tägliches und Bei Bedarf, nie ab dem nächsten Tauschtag; Verschobenes und Termine in der eigenen
+// Abwesenheit nur, wenn sie schon erledigt sind. Der Haken zählt über den Schlüssel für diesen Termin.
+// Liefert nach Datum [{ task, slot, owner, key, status, due, end, completion, next, termKey, deferred }].
+export function nextRounds(tasks, ctx, me, todayStr, doneById, days = 7) {
+  const today = toDay(todayStr);
+  const swap = nextSwap(ctx, todayStr);
+  const out = [];
+  for (const task of tasks) {
+    if (kindOf(task) === 'daily') continue;
+    const seen = new Set();
+    const list = windowsBetween(task, ctx, fromDay(today + 1), fromDay(today + days))
+      .filter((w) => w.owner === me && w.start > todayStr && (!swap || w.start < swap))
+      .sort((a, b) => a.start.localeCompare(b.start));
+    for (const w of list) {
+      if (seen.has(w.slot)) continue;
+      seen.add(w.slot);
+      const c = doneById.get(completionId(task.id, w.key, w.slot)) || null;
+      const off = w.deferred || awayDuring(ctx, me, toDay(w.start), toDay(isRolling(task) ? w.start : w.end));
+      if (off && !c) continue;
+      out.push({
+        task, slot: w.slot, owner: me, key: w.key, status: c ? 'done' : 'upcoming', due: w.start, end: w.end,
+        completion: c, next: null, termKey: w.key, deferred: false,
+      });
+    }
+  }
+  return out.sort((a, b) => a.due.localeCompare(b.due));
+}
+
 // ---------- Fortschritt & Serie ----------
 
 // Aufgaben mit Termin im Bereich [fromStr, toStr], für die `me` zuständig ist (eigene und gemeinsame).
@@ -683,6 +712,34 @@ export function dueBetween(tasks, ctx, fromStr, toStr, doneById, me) {
     }
   }
   return out;
+}
+
+// ---------- Personenfarben ----------
+
+// Reihenfolge nach Farbverlauf, Vorschlag je Person möglichst weit auseinander
+export const PALETTE = ['koralle', 'orange', 'senf', 'gruen', 'tuerkis', 'blau', 'violett', 'rosa'];
+export const COLOR_SUGGESTIONS = ['koralle', 'tuerkis', 'violett', 'senf', 'blau', 'gruen'];
+const OLD_COLORS = { gelb: 'senf', gold: 'senf', rot: 'koralle' };
+
+// Erster Vorschlag, der noch frei ist
+export function suggestColor(taken) {
+  return [...COLOR_SUGGESTIONS, ...PALETTE].find((c) => !taken.includes(c));
+}
+
+// Bestehende Haushalte: alte Farben auf die ähnlichste neue, keine doppelten. Wird nur beim Lesen umgerechnet,
+// in der Datenbank ändert sich nichts. Ohne Änderung kommt dieselbe Liste zurück.
+export function migrateColors(persons) {
+  const keep = new Map();
+  persons.forEach((p, i) => { if (PALETTE.includes(p.color) && !keep.has(p.color)) keep.set(p.color, i); });
+  if (keep.size === persons.length) return persons;
+  const used = [...keep.keys()];
+  return persons.map((p, i) => {
+    if (keep.get(p.color) === i) return p;
+    const wish = OLD_COLORS[p.color];
+    const color = wish && !used.includes(wish) ? wish : suggestColor(used);
+    used.push(color);
+    return { ...p, color };
+  });
 }
 
 // ---------- Meine Haushalte (nur auf diesem Gerät) ----------
