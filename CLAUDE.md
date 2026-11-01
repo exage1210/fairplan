@@ -176,6 +176,14 @@ Gilt vor älteren Einträgen oben (Statuskarte, Tagesliste im Plan, Kacheln je Z
 - Statistik: „Nach Rhythmus“ eingeklappt; offene Meilensteine „noch offen“ statt „läuft“.
 - Einladen nach dem Anlegen und unter Mehr: dieselbe `inviteView`. Tausch- und Ziel-Hinweis mit × (`.swapnote::after`).
 
+## Haushalt pausieren (1.11.2026, v48; Vault-Notiz „Prompt Admin“, Admin zurückgestellt)
+- `pauses` im Haushalt `[{ from, to }]`, getrennt von `away`. Vergangene bleiben stehen, sonst zählten ihre Termine rückwirkend wieder (`pauseDuring`, `currentPause`, `setPause`, `endPause`). Beenden setzt das Ende auf gestern; noch nicht begonnen: Eintrag weg. Jede Person darf alles.
+- `paused` in logic.js und app.js prüft zuerst die Pause: nichts rot, Balken, Serie, Ziel und Meilensteine zählen pausierte Termine nicht, Vorher abhaken bietet sie nicht an. Wie bei der Abwesenheit genügt, dass ein Fenster die Pause berührt; deshalb kann eine Pause einen knapp verfehlten Vormonat noch aufs Ziel heben.
+- `pausedItem`: auf Aktuell und bei der Zahl am Icon fällt alles weg, während der Pause auch Tägliches und Fremdes; davor, was in die Pause fällt. Abmachungen und Bei Bedarf bleiben freiwillig abhakbar. Aufgabenliste zeigt weiter alles.
+- Aktuell: Statuskarte „Haushalt pausiert bis …“ ohne Balken. Plan: keine Ringe, Hinweis im Tag und in der Vorschau. `isAway` bleibt nur die Abwesenheit.
+- Abwesenheit einer Person geprüft (kein Ausgleich, Vertretung freiwillig). `awayPast` im Haushalt `{ personId: [{ from, to }] }` hält Vergangenes (`changeAway`), auch beim Löschen: bereits vergangene Tage bleiben entschuldigt, Künftiges lässt sich frei ändern. Ein bereits vergangener Eintrag ist in der App nicht mehr rücknehmbar.
+- `moveRange` für Abwesenheit und Pause: Das geänderte Datum gewinnt, nichts wird vertauscht (sonst entstünde beim Eintragen kurz ein falscher Bereich, der in `awayPast` landen könnte).
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.
