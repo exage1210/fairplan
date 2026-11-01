@@ -5,7 +5,7 @@ import {
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
   PACKAGES, MAX_PERSONS, isPackage, swapsByRound, upsertHome,
   goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX,
-  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull, PALETTE, colorName, colorLabel, urgency,
+  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull, PALETTE, colorName, colorLabel, urgency, pauseDuring, currentPause, setPause, endPause, pausedItem, changeAway, moveRange,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED, GOAL_REWARDS } from './template.js';
@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.47';
+const APP_VERSION = '2.0.48';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -53,6 +53,7 @@ const ICON_PATHS = {
   qr: 'M4.5 3h4A1.5 1.5 0 0 1 10 4.5v4A1.5 1.5 0 0 1 8.5 10h-4A1.5 1.5 0 0 1 3 8.5v-4A1.5 1.5 0 0 1 4.5 3zM15.5 3h4A1.5 1.5 0 0 1 21 4.5v4a1.5 1.5 0 0 1-1.5 1.5h-4A1.5 1.5 0 0 1 14 8.5v-4A1.5 1.5 0 0 1 15.5 3zM4.5 14h4a1.5 1.5 0 0 1 1.5 1.5v4A1.5 1.5 0 0 1 8.5 21h-4A1.5 1.5 0 0 1 3 19.5v-4A1.5 1.5 0 0 1 4.5 14zM14 14h3v3M21 14v.01M14 21h3M21 17v4',
   db: 'M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
   flag: 'M5 21V4M5 4h11l-2 4 2 4H5',
+  pause: 'M8 5v14M16 5v14',
   swap: 'M4 8h15M15 4l4 4-4 4M20 16H5M9 12l-4 4 4 4',
   target: 'M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0zM16 12a4 4 0 1 1-8 0a4 4 0 1 1 8 0z',
   camera: 'M4 8h3l2-3h6l2 3h3v11H4zM15.5 13a3.5 3.5 0 1 1-7 0a3.5 3.5 0 1 1 7 0z',
@@ -363,6 +364,7 @@ const MAIN = { heute: () => viewToday(), plan: () => viewPlan(), statistik: () =
 const PAGES = {
   profil: ['Profil', () => viewProfile()],
   haushalt: ['Personen', () => viewHousehold()],
+  pause: ['Haushalt pausieren', () => viewPause()],
   ziel: ['Gemeinsames Ziel', () => `<h2>Monatsziel</h2>${goalBlock(goalOf(S.hh))}`],
   haushalte: ['Meine Haushalte', () => viewHomes()],
   code: ['Person einladen', () => viewCode()],
@@ -512,7 +514,7 @@ const listOf = (items, opts) => (items.length ? `<div class="list">${items.map((
 
 // Zahl am App-Icon: nicht Geschafftes + was heute drängt (eigenes und gemeinsames), ohne Tägliches
 function badgeCount() {
-  return allItems().filter((i) => (i.owner === S.me || i.owner === null) && !myPaused(i) && kindOf(i.task) !== 'daily'
+  return allItems().filter((i) => (i.owner === S.me || i.owner === null) && !myPaused(i) && !pausedItem(i, S.hh, S.today) && kindOf(i.task) !== 'daily'
     && isPressing(i, S.today)).length;
 }
 let lastBadge = -1;
@@ -524,7 +526,7 @@ function updateBadge() {
   (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 
-const paused = (w) => (w.owner === null
+const paused = (w) => pauseDuring(S.hh, toDay(w.start), toDay(w.end)) || (w.owner === null
   ? S.hh.persons.every((p) => awayDuring(S.hh, p.id, toDay(w.start), toDay(w.end)))
   : awayDuring(S.hh, w.owner, toDay(w.start), toDay(w.end)));
 const colorOf = (id) => { const p = person(id); return p ? `var(--c-${p.color})` : 'var(--shared)'; };
@@ -540,7 +542,7 @@ const byOwnerRhythm = (a, b) => (a.owner === S.me ? 0 : 1) - (b.owner === S.me ?
 const weekStart = () => fromDay(toDay(S.today) - weekdayOf(S.today));
 const doneMap = () => new Map([...S.dayComps.map((c) => [c.id, c]), ...S.comps]);
 const myDays = () => S.dayComps.filter((c) => c.by === S.me);
-const isAway = (id, day) => { const a = S.hh.away?.[id]; return !!(a?.from && a?.to && a.from <= day && day <= a.to); };
+const isAway = (id, day) => awayDuring(S.hh, id, toDay(day), toDay(day));
 // Nur neu rechnen, wenn sich Daten geändert haben: Die Quellen werden bei jeder Änderung ersetzt, nie verändert
 const whenChanged = (fn) => {
   let seen = [], value;
@@ -572,7 +574,7 @@ function viewToday() {
   const items = allItems();
   const sun = weekEnd();
   const [myFrom, myTo] = personalWeek(person(S.me)?.days, S.today);
-  const open = items.filter((i) => i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming');
+  const open = items.filter((i) => (i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming') && !pausedItem(i, S.hh, S.today));
   // Aufgaben: Vergessenes, jetzt Dranes und was diese Woche noch kommt (lässt sich schon vorher abhaken)
   const tasks = open.filter((i) => mineItem(i) && !myPaused(i) && (i.status !== 'upcoming' || i.due <= sun))
     .sort(byUrgency);
@@ -598,19 +600,20 @@ function viewToday() {
   const away = S.hh.away?.[S.me];
   const meAway = away?.from && away.from <= S.today && S.today <= away.to;
   // Alles erledigt: nichts Fälliges offen, aber es gibt eigene Aufgaben und der Plan läuft
-  const calm = !now.length && !meAway && S.today >= S.hh.setup && items.some((i) => mineItem(i) && kindOf(i.task) !== 'asneeded');
+  const homePause = pauseDuring(S.hh, toDay(S.today), toDay(S.today)) ? currentPause(S.hh, S.today) : null;
+  const calm = !now.length && !meAway && !homePause && S.today >= S.hh.setup && items.some((i) => mineItem(i) && kindOf(i.task) !== 'asneeded');
   const ahead = calm ? nextRounds(S.tasks, S.hh, S.me, S.today, doneMap()) : [];
   const aheadIds = new Set(ahead.map((i) => completionId(i.task.id, i.key, i.slot)));
   const inAhead = (i) => i.key && aheadIds.has(completionId(i.task.id, i.key, i.slot));
   const me = person(S.me);
   const swap = nextSwap(S.hh, S.today);
 
-  const headline = meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.`
+  const headline = homePause ? `Haushalt pausiert bis ${fmtDate(homePause.to)}` : meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.`
     : calm ? 'Alles erledigt' : pressing.length ? `Noch ${pressing.length} offen`
       : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.';
   const card = `${movedNote()}${goalNote()}${swapNote()}<section class="card status">
-      <div class="status-head">${calm ? starSvg(`var(--c-${me.color})`, !S.cheered) : ''}<div><b>${headline}</b>${calm ? '<span>Genieß den Tag.</span>' : ''}</div></div>
-      ${weekAll ? `<div><div class="bar-head"><span>Diese Woche ${weekDone} von ${weekAll}</span></div><div class="bar thin"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div></div>` : ''}
+      <div class="status-head">${calm ? starSvg(`var(--c-${me.color})`, !S.cheered) : ''}<div><b>${headline}</b>${calm ? '<span>Genieß den Tag.</span>' : homePause ? '<span>Alle Aufgaben pausieren, nichts wird rot.</span>' : ''}</div></div>
+      ${weekAll && !homePause ? `<div><div class="bar-head"><span>Diese Woche ${weekDone} von ${weekAll}</span></div><div class="bar thin"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div></div>` : ''}
       ${S.today < S.hh.setup ? `<span class="card-next">Euer Plan startet am ${fmtDate(S.hh.setup, true)}</span>` : ''}
       ${swap && toDay(swap) - toDay(S.today) <= 3 ? `<span class="card-next">Tausch am ${fmtDate(swap)}</span>` : ''}
     </section>`;
@@ -747,7 +750,7 @@ function viewPlan() {
   const cell = (ds) => {
     const done = doneOn.get(ds) || [];
     const owners = planned.get(ds) || new Set();
-    const rings = ds < S.today || ds < S.hh.setup ? '' : [
+    const rings = ds < S.today || ds < S.hh.setup || pauseDuring(S.hh, toDay(ds), toDay(ds)) ? '' : [
       ...S.hh.persons.filter((p) => !isAway(p.id, ds) && ((p.days?.length ? p.days : [5]).includes(weekdayOf(ds)) || owners.has(p.id)))
         .map((p) => `<i class="ring-dot" style="--pc:var(--d-${p.color})"></i>`),
       owners.has(null) ? '<i class="ring-dot" style="--pc:var(--shared)"></i>' : '',
@@ -802,15 +805,17 @@ function dayDetail(sel, doneOn, holiday) {
       <time>${time}</time>${c.by === S.me ? `<button class="minibtn" data-reopen="${esc(c.id)}">Rückgängig</button>` : ''}</div>`;
   }).join('');
   const awayP = S.hh.persons.filter((p) => isAway(p.id, sel));
-  const idle = sel < S.today || sel < S.hh.setup ? [] : S.hh.persons.filter((p) => !isAway(p.id, sel)
+  const homePaused = pauseDuring(S.hh, toDay(sel), toDay(sel));
+  const idle = sel < S.today || sel < S.hh.setup || homePaused ? [] : S.hh.persons.filter((p) => !isAway(p.id, sel)
     && (p.days?.length ? p.days : [5]).includes(weekdayOf(sel)) && !wins.some((w) => w.owner === p.id));
   const dayName = sel === S.today ? 'Heute' : WEEKDAYS_LONG[weekdayOf(sel)];
   return `<h2>${dayName}, ${asDate(sel).getDate()}. ${shortMonth(sel)}${holiday ? ` · ${esc(holiday)}` : ''}</h2>
+    ${homePaused ? '<div class="awaynote" style="--pc:var(--accent)">Haushalt pausiert</div>' : ''}
     ${awayP.map((p) => `<div class="awaynote" style="--pc:var(--c-${p.color})">${esc(p.name)} ist abwesend</div>`).join('')}
     ${planned ? `${past ? '<p class="none">Offen geblieben</p>' : ''}<div class="tile">${planned}</div>` : ''}
     ${doneRows ? `<div class="tile">${doneRows}</div>` : ''}
     ${idle.length ? `<p class="none">Putztag von ${idle.map((p) => esc(p.name)).join(', ').replace(/, ([^,]*)$/, ' und $1')}, nichts geplant.</p>` : ''}
-    ${planned || doneRows || awayP.length || idle.length ? '' : '<p class="none">Nichts an diesem Tag.</p>'}`;
+    ${planned || doneRows || awayP.length || idle.length || homePaused ? '' : '<p class="none">Nichts an diesem Tag.</p>'}`;
 }
 
 // Nächste 2 Wochen: kommende Aufgaben ohne Tägliches, Abwesenheiten in Personenfarbe
@@ -823,6 +828,10 @@ function nextTwoWeeks(folded) {
     const a = S.hh.away?.[p.id];
     if (!a?.from || !a?.to || toDay(a.to) < first || toDay(a.from) > last) continue;
     add(fromDay(Math.max(first, toDay(a.from))), `<li class="away"><i style="--pc:var(--d-${p.color})"></i><span class="by" data-c="${p.color}">${esc(p.name)} abwesend bis ${fmtDate(a.to)}</span></li>`);
+  }
+  for (const r of S.hh.pauses || []) {
+    if (!r.from || !r.to || toDay(r.to) < first || toDay(r.from) > last) continue;
+    add(fromDay(Math.max(first, toDay(r.from))), `<li class="away"><i style="--pc:var(--shared)"></i><span>Haushalt pausiert bis ${fmtDate(r.to)}</span></li>`);
   }
   const wins = S.tasks.flatMap((t) => windowsBetween(t, S.hh, fromDay(first), fromDay(last)))
     .filter((w) => kindOf(w.task) !== 'daily' && toDay(w.deferred ? w.end : w.start) >= first && toDay(w.deferred ? w.end : w.start) <= last
@@ -1053,6 +1062,7 @@ function viewMore() {
   const hh = S.hh, me = person(S.me);
   const awayNames = hh.persons.filter((p) => hh.away?.[p.id]?.to >= S.today).map((p) => esc(p.name)).join(', ');
   const shared = sharedDaysOf(hh).map((d) => WEEKDAYS[d]).join(', ');
+  const pauseNext = currentPause(hh, S.today);
   const themes = [['auto', 'Auto'], ['dark', 'Dunkel'], ['light', 'Hell'], ['zart', 'Farbe']]
     .map(([v, l]) => `<button data-theme-set="${v}" aria-pressed="${theme() === v}">${l}</button>`).join('');
   return `<button class="ptile" data-go="profil">${avatar(me, 'l')}<span>${esc(me.name)}</span><span class="chev">${icon('chevron', 18)}</span></button>
@@ -1062,6 +1072,7 @@ function viewMore() {
       ${homes().length > 1 ? goRow('haushalte', 'list', 'Meine Haushalte', homes().length) : ''}
       ${goRow('putztag', 'plan', putztagWord(hh.sharedDays, 'Gemeinsamer Putztag', 'Gemeinsame Putztage'), shared)}
       ${goRow('abwesenheit', 'away', 'Abwesenheit', awayNames || 'Keine')}
+      ${goRow('pause', 'pause', 'Haushalt pausieren', pauseNext ? `${pauseNext.from > S.today ? 'ab' : 'bis'} ${fmtDate(pauseNext.from > S.today ? pauseNext.from : pauseNext.to)}` : 'Aus')}
     </div>
     <h2>Aufgaben</h2><div class="tile">
       ${goRow('aufgaben', 'list', 'Aufgabenliste', S.tasks.length)}
@@ -1221,6 +1232,15 @@ function viewAway() {
       ${a.from || a.to ? `<button class="btn block" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}`;
   }).join('');
   return `${rows}<span class="hint">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn alle weg sind.</span>`;
+}
+
+// Gemeinsamer Urlaub: jede Person darf setzen, ändern und beenden
+function viewPause() {
+  const r = currentPause(S.hh, S.today) || {};
+  return `<div class="inline" style="margin-top:18px"><label class="field">von<input type="date" data-pause-field="from" value="${esc(r.from || '')}"></label>
+      <label class="field">bis<input type="date" data-pause-field="to" value="${esc(r.to || '')}"></label></div>
+    ${r.from ? `<button class="btn block" data-action="pause-end">${r.from > S.today ? 'Pause löschen' : 'Pause beenden'}</button>` : ''}
+    <span class="hint">In dieser Zeit pausieren alle Aufgaben für alle, auch Gemeinsames und Tägliches: Nichts wird rot, keine Zahl am Icon, Serie und Ziel leiden nicht. Für eine einzelne Person gibt es die Abwesenheit.</span>`;
 }
 
 const viewRules = () => {
@@ -1774,7 +1794,7 @@ app.addEventListener('click', (e) => {
   if (d.go) { S.stack.push(S.view); S.view = d.go; history.pushState(null, ''); window.scrollTo(0, 0); return render(); }
   if (el.matches('[data-back]')) { S.addRule = false; return history.back(); }
   if (d.filter) { S.filter = d.filter; return render(); }
-  if (d.awayClear) return updateHH({ away: { ...(S.hh.away || {}), [d.awayClear]: {} } });
+  if (d.awayClear) return updateHH(changeAway(S.hh, d.awayClear, {}, S.today));
   if (d.planMode) { S.planMode = d.planMode; S.planDate = S.calDay || S.planDate; return render(); }
   if (d.planNav) {
     const a = planAnchor(), step = +d.planNav;
@@ -1872,6 +1892,7 @@ app.addEventListener('click', (e) => {
     case 'badge':
       Notification.requestPermission().then(() => { lastBadge = -1; render(); }).catch(() => {});
       return;
+    case 'pause-end': return updateHH({ pauses: endPause(S.hh.pauses, S.today) });
     case 'new-home': return newHome();
     case 'new-guest': return newGuestHome();
     case 'move-go': return void switchHome(S.hh.movedTo);
@@ -2027,13 +2048,10 @@ app.addEventListener('change', (e) => {
     else el.value = S.hh.setup;
     return render();
   }
+  if (d.pauseField) return updateHH({ pauses: setPause(S.hh.pauses, d.pauseField, el.value, S.today) });
   if (d.awayFrom || d.awayTo) {
     const id = d.awayFrom || d.awayTo;
-    const cur = { ...(S.hh.away?.[id] || {}), [d.awayFrom ? 'from' : 'to']: el.value };
-    if (cur.from && !cur.to) cur.to = cur.from;
-    if (cur.to && !cur.from) cur.from = cur.to;
-    if (cur.from && cur.to && cur.to < cur.from) [cur.from, cur.to] = [cur.to, cur.from];
-    return updateHH({ away: { ...(S.hh.away || {}), [id]: cur } });
+    return updateHH(changeAway(S.hh, id, el.value ? moveRange(S.hh.away?.[id], d.awayFrom ? 'from' : 'to', el.value) : {}, S.today));
   }
 });
 

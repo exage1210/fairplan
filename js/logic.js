@@ -354,12 +354,50 @@ export function autoSplit(tasks, persons = 2) {
 
 // ctx.away = { personId: { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' } }
 // Überschneidet sich die Abwesenheit mit dem Zeitraum [a, b] (Tagesnummern)?
-export function awayDuring(ctx, personId, a, b) {
-  const r = ctx.away?.[personId];
-  return !!(r?.from && r?.to && toDay(r.from) <= b && toDay(r.to) >= a);
+// Von oder bis ändern: fehlt das andere oder passt es nicht mehr, gilt derselbe Tag. Das geänderte Datum gewinnt,
+// Vertauschen ergäbe beim Eintragen einer neuen Zeit kurz einen Bereich vom alten Ende bis zum neuen Anfang.
+export function moveRange(cur, field, value) {
+  const next = { ...cur, [field]: value };
+  if (!next.from || !next.to || next.to < next.from) { next.from = value; next.to = value; }
+  return next;
 }
-// Pausiert = zuständige Person war weg (bei Gemeinsamem: beide)
-const paused = (ctx, owner, a, b) => (owner === null
+// ctx.awayPast = { personId: [{ from, to }] }: was schon war, bleibt entschuldigt, auch wenn eine neue Abwesenheit eingetragen wird.
+export function awayDuring(ctx, personId, a, b) {
+  const hit = (r) => !!(r?.from && r?.to && toDay(r.from) <= b && toDay(r.to) >= a);
+  return hit(ctx.away?.[personId]) || (ctx.awayPast?.[personId] || []).some(hit);
+}
+// Abwesenheit ändern oder löschen: Liefert die Felder fürs Speichern. Bereits vergangene Tage wandern nach awayPast.
+export function changeAway(ctx, personId, next, todayStr) {
+  const cur = ctx.away?.[personId];
+  const yesterday = fromDay(toDay(todayStr) - 1);
+  const list = ctx.awayPast?.[personId] || [];
+  const kept = cur?.from && cur?.to && cur.from <= yesterday ? { from: cur.from, to: cur.to < yesterday ? cur.to : yesterday } : null;
+  const known = kept && list.some((r) => r.from <= kept.from && r.to >= kept.to);
+  return {
+    away: { ...(ctx.away || {}), [personId]: next },
+    ...(kept && !known ? { awayPast: { ...(ctx.awayPast || {}), [personId]: [...list, kept] } } : {}),
+  };
+}
+// Haushalt pausieren: ctx.pauses = [{ from, to }], vergangene bleiben stehen, sonst zählten ihre Termine rückwirkend wieder.
+// Getrennt von der Abwesenheit, beide dürfen sich überschneiden.
+export const pauseDuring = (ctx, a, b) => (ctx.pauses || []).some((r) => r.from && r.to && toDay(r.from) <= b && toDay(r.to) >= a);
+export const currentPause = (ctx, todayStr) => [...(ctx.pauses || [])].reverse().find((r) => r.to >= todayStr) || null;
+// Von oder bis ändern; fehlt das andere, gilt derselbe Tag. Leer entfernt die Pause.
+export function setPause(list = [], field, value, todayStr) {
+  const cur = currentPause({ pauses: list }, todayStr);
+  const rest = list.filter((r) => r !== cur);
+  if (!value) return rest;
+  return [...rest, moveRange(cur, field, value)];
+}
+// Beenden: Das Ende rückt auf gestern, damit nichts rückwirkend rot wird. Noch nicht begonnen: einfach weg.
+export function endPause(list = [], todayStr) {
+  const cur = currentPause({ pauses: list }, todayStr);
+  if (!cur) return list;
+  const rest = list.filter((r) => r !== cur);
+  return cur.from >= todayStr ? rest : [...rest, { ...cur, to: fromDay(toDay(todayStr) - 1) }];
+}
+// Pausiert = Haushalt pausiert oder zuständige Person war weg (bei Gemeinsamem: alle)
+const paused = (ctx, owner, a, b) => pauseDuring(ctx, a, b) || (owner === null
   ? ctx.persons.every((p) => awayDuring(ctx, p.id, a, b))
   : awayDuring(ctx, owner, a, b));
 
@@ -460,6 +498,10 @@ export function personalWeek(days, todayStr) {
 // Drängt heute? Vergessenes immer; Wöchentliches und „alle 2 Wochen“ nur am Termin und am Tag danach.
 export const isPressing = (item, todayStr) => item.status === 'overdue'
   || (item.status === 'due' && !item.deferred && (!isRolling(item.task) || toDay(todayStr) <= toDay(item.due) + 1));
+
+// Fällt die Zeile wegen der Haushalts-Pause weg? Während der Pause alles, davor, was in die Pause fällt.
+export const pausedItem = (item, ctx, todayStr) => pauseDuring(ctx, toDay(todayStr), toDay(todayStr))
+  || !!(item.due && item.end && pauseDuring(ctx, toDay(item.due), toDay(isRolling(item.task) ? item.due : item.end)));
 
 // Reihenfolge auf „Aktuell“: Vergessenes, was heute drängt, was noch Zeit hat, was erst kommt
 export const urgency = (item, todayStr) => (item.status === 'overdue' ? 0 : item.status === 'upcoming' ? 3 : isPressing(item, todayStr) ? 1 : 2);
@@ -689,7 +731,7 @@ export function nextRounds(tasks, ctx, me, todayStr, doneById, days = 7) {
       if (seen.has(w.slot)) continue;
       seen.add(w.slot);
       const c = doneById.get(completionId(task.id, w.key, w.slot)) || null;
-      const off = w.deferred || awayDuring(ctx, me, toDay(w.start), toDay(isRolling(task) ? w.start : w.end));
+      const off = w.deferred || paused(ctx, me, toDay(w.start), toDay(isRolling(task) ? w.start : w.end));
       if (off && !c) continue;
       out.push({
         task, slot: w.slot, owner: me, key: w.key, status: c ? 'done' : 'upcoming', due: w.start, end: w.end,
