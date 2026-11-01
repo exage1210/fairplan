@@ -7,7 +7,7 @@ import {
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
   personalWeek, isPressing, goalOf, goalStats, goalResult,
   jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX, PACKAGES, isPackage, swapsByRound, upsertHome,
-  nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull, colorName, colorLabel,
+  nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull, colorName, colorLabel, urgency,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -1056,4 +1056,15 @@ test('Farbnamen: sichtbar die Farbe, für Screenreader Farbe und Tier, alle 8 vo
   assert.equal(colorLabel('koralle'), 'Koralle (Krabbe)');
   assert.equal(colorLabel('tuerkis'), 'Türkis (Schildkröte)');
   for (const c of PALETTE) assert.match(colorLabel(c), /^\S+ \(\S+\)$/);
+});
+
+test('Aktuell: Vergessenes zuerst, dann was drängt, was Zeit hat, was erst kommt', () => {
+  const today = '2026-11-01';
+  const w = task({ assign: 'A' }), m = task({ n: 1, unit: 'month', assign: 'A' });
+  const late = { task: m, status: 'overdue', due: '2026-10-01', end: '2026-10-06' };
+  const now = { task: w, status: 'due', due: '2026-10-31', end: '2026-11-06', deferred: false };
+  const later = { task: w, status: 'due', due: '2026-10-25', end: '2026-11-06', deferred: false };
+  const soon = { task: w, status: 'upcoming', due: '2026-11-07', end: '2026-11-13' };
+  const order = [soon, later, now, late].sort((a, b) => urgency(a, today) - urgency(b, today));
+  assert.deepEqual(order, [late, now, later, soon]);
 });
