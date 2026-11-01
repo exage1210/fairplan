@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.49';
+const APP_VERSION = '2.0.50';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -129,6 +129,7 @@ const S = {
   statMode: 'week',
   addRule: false, // Eingabe „+ Abmachung“ offen
   undone: [], // zurückgenommene Haken, warten auf die stille Prüfung (settleUndone)
+  pendingDone: new Map(), // Haken, die noch wegrutschen und erst danach gespeichert werden
   cheered: true, // beim Öffnen nicht einblenden, nur wenn gerade alles erledigt wurde
   backup: null, // fertig geladene Sicherung, wartet auf „Datei sichern“
   today: localToday(),
@@ -222,10 +223,6 @@ async function init() {
   if (standalone()) history.replaceState(null, '', location.pathname);
   if (join.length === 16 && join !== S.code
     && (!S.code || confirm('Diesem Haushalt beitreten? Der bisherige bleibt unter Mehr › Meine Haushalte.'))) {
-    ls.set('me', null);
-    ls.set('accent', null);
-    delete document.documentElement.dataset.accent;
-    S.me = null;
     startSetup();
     joinHousehold(join);
   } else if (S.code) connect(S.code);
@@ -1039,7 +1036,7 @@ function viewStats() {
     <div class="tiles2"><div class="stat"><span>Aktuelle Serie</span><b class="a">${seriesText(current)}</b></div><div class="stat"><span>Längste Serie</span><b>${seriesText(best)}</b></div></div>
     ${goalNow.total || (S.hh.rules || []).length ? `<h2>Ziel und Joker</h2><div class="tile pad">
       ${goalNow.total ? `<div class="rrow"><div><b>Gemeinsam${goal.reward ? ` · ${esc(goal.reward)}` : ''}</b><span>${goalNow.percent} % von ${goal.percent} %</span></div><div class="bar thin"><i style="width:${Math.min(100, goalNow.percent)}%"></i></div></div>` : ''}
-      ${(S.hh.rules || []).length ? `<div class="rrow"><div><b>${joker.count ? `${joker.count} Joker` : 'Joker'}</b><span>${joker.count >= JOKER_MAX ? 'Vorrat voll' : `noch ${JOKER_PRICE - joker.progress} Abmachungen`}</span></div><div class="bar thin"><i style="width:${joker.count >= JOKER_MAX ? 100 : Math.max(0, Math.round((joker.progress / JOKER_PRICE) * 100))}%"></i></div></div>` : ''}
+      ${(S.hh.rules || []).length ? `<div class="rrow"><div><b>${joker.count ? `${joker.count} Joker` : 'Joker'}</b><span>${joker.count >= JOKER_MAX ? 'Vorrat voll' : `noch ${JOKER_PRICE - joker.progress} ${JOKER_PRICE - joker.progress === 1 ? 'Abmachung' : 'Abmachungen'}`}</span></div><div class="bar thin"><i style="width:${joker.count >= JOKER_MAX ? 100 : Math.max(0, Math.round((joker.progress / JOKER_PRICE) * 100))}%"></i></div></div>` : ''}
     </div>` : ''}
     ${rhythm ? fold('rhythm', 'Nach Rhythmus', `<div class="tile pad">${rhythm}</div>`) : ''}
     <h2>Meilensteine</h2><div class="badges">${badges}</div>`;
@@ -1226,8 +1223,8 @@ function viewAway() {
   const rows = S.hh.persons.map((p) => {
     const a = S.hh.away?.[p.id] || {};
     return `<h2>${esc(p.name)}${p.id === S.me ? ' (du)' : ''}</h2>
-      <div class="inline"><label class="field">von<input type="date" data-away-from="${p.id}" value="${esc(a.from || '')}"></label>
-        <label class="field">bis<input type="date" data-away-to="${p.id}" value="${esc(a.to || '')}"></label></div>
+      <div class="inline"><label class="field">von<input type="date" data-away-from="${p.id}" min="${S.today}" value="${esc(a.from || '')}"></label>
+        <label class="field">bis<input type="date" data-away-to="${p.id}" min="${S.today}" value="${esc(a.to || '')}"></label></div>
       ${a.from || a.to ? `<button class="btn block" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}`;
   }).join('');
   return `${rows}<span class="hint">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn alle weg sind.</span>`;
@@ -1236,8 +1233,8 @@ function viewAway() {
 // Gemeinsamer Urlaub: jede Person darf setzen, ändern und beenden
 function viewPause() {
   const r = currentPause(S.hh, S.today) || {};
-  return `<div class="inline" style="margin-top:18px"><label class="field">von<input type="date" data-pause-field="from" value="${esc(r.from || '')}"></label>
-      <label class="field">bis<input type="date" data-pause-field="to" value="${esc(r.to || '')}"></label></div>
+  return `<div class="inline" style="margin-top:18px"><label class="field">von<input type="date" data-pause-field="from" min="${S.today}" value="${esc(r.from || '')}"></label>
+      <label class="field">bis<input type="date" data-pause-field="to" min="${S.today}" value="${esc(r.to || '')}"></label></div>
     ${r.from ? `<button class="btn block" data-action="pause-end">${r.from > S.today ? 'Pause löschen' : 'Pause beenden'}</button>` : ''}
     <span class="hint">In dieser Zeit pausieren alle Aufgaben für alle, auch Gemeinsames und Tägliches: Nichts wird rot, keine Zahl am Icon, Serie und Ziel leiden nicht. Für eine einzelne Person gibt es die Abwesenheit.</span>`;
 }
@@ -1520,7 +1517,22 @@ async function joinHousehold(fromLink) {
   st.step = 'busy'; renderSetup();
   let hh = null;
   try { hh = await S.store.getHousehold(code); } catch (e) { console.error(e); }
-  if (!hh) { Object.assign(st, { step: 'start', error: 'Kein Haushalt mit diesem Code gefunden (oder offline).' }); return renderSetup(); }
+  if (!hh) {
+    const error = 'Kein Haushalt mit diesem Code gefunden (oder offline).';
+    // Kaputter Link: Wer schon in einem Haushalt ist, bleibt dort
+    if (fromLink && S.code) {
+      history.replaceState(null, '', location.pathname);
+      S.setup = null;
+      connect(S.code);
+      return snack(error);
+    }
+    Object.assign(st, { step: 'start', error });
+    return renderSetup();
+  }
+  ls.set('me', null);
+  ls.set('accent', null);
+  delete document.documentElement.dataset.accent;
+  S.me = null;
   ls.set('code', code);
   S.code = code;
   keepIdentity();
@@ -1587,7 +1599,10 @@ function toggle(input) {
     row.classList.add('checking');
     const slide = S.view === 'heute' && !ahead;
     if (slide) setTimeout(() => row.classList.add('leaving'), 350);
-    setTimeout(() => S.store.setCompletion(S.code, id, data), slide ? 600 : 350);
+    S.pendingDone.set(id, setTimeout(() => {
+      S.pendingDone.delete(id);
+      S.store.setCompletion(S.code, id, data);
+    }, slide ? 600 : 350));
     haptic();
     const proxy = it.owner && it.owner !== S.me ? ` für ${esc(person(it.owner).name)}` : '';
     snack(ahead ? 'Vorab erledigt.' : `Erledigt${proxy}.`, () => undoCompletion(id));
@@ -1596,6 +1611,12 @@ function toggle(input) {
 
 // Jeder Weg zurück läuft hier durch: merkt sich den Haken für die stille Prüfung (settleUndone)
 function undoCompletion(id, rule = false) {
+  // Noch nicht gespeichert: nur das Speichern absagen, die Zeile kommt beim Neuzeichnen zurück
+  if (S.pendingDone.has(id)) {
+    clearTimeout(S.pendingDone.get(id));
+    S.pendingDone.delete(id);
+    return render();
+  }
   const prev = S.comps.get(id) || S.dayComps.find((c) => c.id === id);
   S.undone.push({ id, day: prev?.day ?? S.today, at: prev?.at, rule: rule || !!prev?.rule });
   S.store.removeCompletion(S.code, id);
@@ -1769,7 +1790,7 @@ function toggleStep(input) {
       taskId: task.id, title: task.title, key: it.key, slot, forPerson: it.owner,
       by: S.me, at: new Date().toISOString(), day: S.today,
     });
-    snack('Alle Teilschritte erledigt – Aufgabe erledigt.', () => undoCompletion(main));
+    snack('Alle Teilschritte erledigt – Aufgabe erledigt.', () => { undoCompletion(main); S.store.removeCompletion(S.code, id); }); // nimmt den letzten Teilschritt mit zurück
   }
 }
 
@@ -1998,6 +2019,14 @@ app.addEventListener('submit', (e) => {
   addOwnRule();
 });
 
+// Vergangenes bei Pause und Abwesenheit ließe sich nicht mehr zurücknehmen: gar nicht erst annehmen, das Feld zeigt wieder den gespeicherten Wert
+function refusePast(el, saved) {
+  if (!el.value || el.value >= S.today) return false;
+  el.value = saved || '';
+  snack('Nur heute oder später möglich.');
+  return true;
+}
+
 app.addEventListener('change', (e) => {
   const el = e.target;
   const d = el.dataset;
@@ -2048,9 +2077,13 @@ app.addEventListener('change', (e) => {
     else el.value = S.hh.setup;
     return render();
   }
-  if (d.pauseField) return updateHH({ pauses: setPause(S.hh.pauses, d.pauseField, el.value, S.today) });
+  if (d.pauseField) {
+    if (refusePast(el, currentPause(S.hh, S.today)?.[d.pauseField])) return;
+    return updateHH({ pauses: setPause(S.hh.pauses, d.pauseField, el.value, S.today) });
+  }
   if (d.awayFrom || d.awayTo) {
     const id = d.awayFrom || d.awayTo;
+    if (refusePast(el, S.hh.away?.[id]?.[d.awayFrom ? 'from' : 'to'])) return;
     return updateHH(changeAway(S.hh, id, el.value ? moveRange(S.hh.away?.[id], d.awayFrom ? 'from' : 'to', el.value) : {}, S.today));
   }
 });
@@ -2223,10 +2256,12 @@ function openEditor(id) {
     const span = k === 'weekly' ? putztagCount(d) : weeksPerPeriod(d);
     const where = { biweekly: '', monthly: ' im Monat', quarterly: ' im Quartal', halfyear: ' im Halbjahr', yearly: ' im Jahr' }[k] ?? '';
     const cur = Math.min(f.pos.options.length ? +f.pos.value : +(t.pos ?? 0) || 0, span - 1);
-    f.pos.innerHTML = Array.from({ length: span }, (_, i) => {
-      const w = upcoming(draft({ pos: i }), 1)[0];
+    const dates = Array.from({ length: span }, (_, i) => upcoming(draft({ pos: i }), 1)[0]?.start);
+    f.pos.innerHTML = dates.map((ds, i) => {
       const label = k === 'weekly' ? `${i + 1}. Putztag der Woche` : `${i + 1}. Woche${where}`;
-      return opt(i, `${label}${w ? ` – ${fmtWd(w.start)}` : ''}`, cur);
+      // Gibt es diese Woche im Zeitraum nicht, beginnt die Zählung von vorn (dueDay)
+      const same = k !== 'weekly' && ds && dates.indexOf(ds) < i ? `, diesmal wie ${dates.indexOf(ds) + 1}.` : '';
+      return opt(i, `${label}${same}${ds ? ` – ${fmtWd(ds)}` : ''}`, cur);
     }).join('');
   };
   const sync = () => {
