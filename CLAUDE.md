@@ -144,6 +144,22 @@ Gilt vor älteren Einträgen oben, wo sie sich widersprechen (6 Farben, Standard
 - Tiere sind gefüllte Formen mit Linien, nicht nur Umrisse; neu Krabbe, Biene, Schildkröte, Oktopus.
 - Voller Haushalt: Die App weiß nicht, wer auf welchem Gerät ist, „voll“ ist daher nicht erkennbar und ein Beitritt nicht sperrbar. `fullNote` steht unter Mehr › Haushalt, beim Code und bei „Wer bist du?“. Von dort `newGuestHome` (`st.guest`): neuer Haushalt ohne `movedTo`, der fremde merkt nichts.
 
+## Rückgängig nimmt Erfolge zurück (1.11.2026, v45)
+Gilt vor älteren Einträgen oben („einmal erreicht bleibt erreicht“, Joker bei vollem Vorrat).
+- Jeder Weg zurück läuft über `undoCompletion`, das den Haken in `S.undone` merkt. `settleUndone` (in `render`) prüft still, sobald er aus den Daten weg ist; ohne Einblendung, wiedererreicht meldet es sich wie beim ersten Mal.
+- `revokeStats`: Ein Meilenstein fällt nur weg, wenn er auf dieser Art Haken beruht (Abmachung: 100 extra, Erster Joker; Aufgabe: die übrigen), am Tag des Hakens oder später erreicht wurde (`done[id] >= day`) und laut Daten nicht mehr stimmt. So bleibt Erreichtes aus früheren Plänen. Die längste Serie sinkt mit (`longestDay`), `start` wird frei, wenn kein Haken mehr im Plan liegt, dann kommt „Der Anfang ist gemacht!“ erneut.
+- Geladen sind oft nur 62 Tage: Würde sich etwas ändern, holt `settleUndone` erst den ganzen Verlauf ab `setup` (`S.dayLoaded`) und entscheidet dann. Sonst kostet es keine Lesezugriffe.
+- `revokeGoalHits`: nur Monate im Umkreis von einem Monat um den Tag des Hakens, nicht vor einem neu eingerichteten Plan. Auf jedem Gerät setzt `goalNote` still `goal-star` zurück und `goal-seen` auf den Monat (kein „Neuer Monat, neues Ziel.“); wieder erreicht kommen Stern und Hinweis erneut.
+- `jokerTick(j, delta, id)`: `earnedBy` merkt den Haken, der den letzten Joker brachte; nur der nimmt den dritten zurück. Schon eingesetzter Joker: Frist bleibt, `progress` wird negativ („noch 31 bis Joker“), `earned` und der Meilenstein bleiben.
+- Langer Stern: bleibt einmal pro Tag und Gerät (`fairplan.star-day`), auch nach Rückgängig; bewusst nicht geräteübergreifend, das bräuchte täglich einen Schreibzugriff.
+
+## Personen an einem Ort (1.11.2026, v46)
+Gilt vor älteren Einträgen oben („voll ist nicht erkennbar“, Haushalts-Code unter Verwaltung, Abschnitte auf Aktuell).
+- Voll (`householdFull`): Alle Personen stehen beim Anlegen fest; `seen_<id>` im Haushalt wird einmalig gesetzt, sobald die Person die App nutzt (`markSeen`). Voll = alle waren da. Beitritt bleibt ungesperrt. Ein Vermerk lässt sich nicht zurücknehmen.
+- Mehr › Personen (`haushalt`): nicht voll „Person einladen“ plus Textzeile zu neuem Haushalt; voll `fullNote` plus „Neues Handy? Code anzeigen“. Einladeseite `code`: großer QR, „Link teilen“ (ohne Teilen-Funktion kopiert er), Code klein. „Wer bist du?“ zeigt den Hinweis nur bei vollem Haushalt. Gemeinsames Ziel ist die eigene Seite `ziel`.
+- Tier-Icons: `[data-c]` setzt dieselben `--a-*` wie `[data-accent]`, daher je Person. Kreis `--a-soft` (hell/Farbe `--a-soft-l`), Tier `--a-base` (hell/Farbe `--a-strong`), auch in `.colors` und `.avopts`. Buchstaben-Avatare bleiben voll gefärbt.
+- Aktuell: Statuskarte · Abmachungen · Alles erledigt · Als Nächstes · Aufgaben · andere Personen · Bei Bedarf · Erledigt. Bei Bedarf eingeklappt „Bei Bedarf (N)“ mit grauer Zeile in der `summary`; `nowRow(..., plain)` nur Name und Haken, ohne Teilschritte.
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.
