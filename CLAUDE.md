@@ -184,6 +184,11 @@ Gilt vor älteren Einträgen oben (Statuskarte, Tagesliste im Plan, Kacheln je Z
 - Abwesenheit einer Person geprüft (kein Ausgleich, Vertretung freiwillig). `awayPast` im Haushalt `{ personId: [{ from, to }] }` hält Vergangenes (`changeAway`), auch beim Löschen: bereits vergangene Tage bleiben entschuldigt, Künftiges lässt sich frei ändern. Ein bereits vergangener Eintrag ist in der App nicht mehr rücknehmbar.
 - `moveRange` für Abwesenheit und Pause: Das geänderte Datum gewinnt, nichts wird vertauscht (sonst entstünde beim Eintragen kurz ein falscher Bereich, der in `awayPast` landen könnte).
 
+## Bereich Personen (1.11.2026, v49)
+Gilt vor „Personen an einem Ort“ (v46) oben.
+- Mehr › Personen: Liste · „Link oder QR teilen“ (Seite `code`, immer sichtbar, für Personen im Haushalt oder ein neues Handy) · „+ Person“ (`add-person`: `newHome(ADD_PERSON)`, nur diese eine Nachfrage, sonst der bestehende Weg). „Person einladen“, „Neues Handy?“ und die Textzeile sind weg.
+- `householdFull` steuert nur noch den Hinweis bei „Wer bist du?“ (`fullNote`, Gast-Weg ohne `movedTo`); Beitritt bleibt ungesperrt. Meine Haushalte behält die alte Nachfrage.
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.
