@@ -135,6 +135,15 @@ Gilt vor älteren Einträgen oben („Paket A/B“, „2 Personen“).
 - Vor dem Start zeigt die Statuskarte „Euer Plan startet am …“, nichts ist fällig oder rot. Abmachungen und Bei Bedarf gehen schon.
 - Mehr › Start des Plans: Solange noch nicht getauscht wurde, rückt der erste Tausch mit (`rotationBase`), danach bleibt er.
 
+## Feinschliff (1.11.2026, v44; Vault-Notiz „Prompt Feinschliff“)
+Gilt vor älteren Einträgen oben, wo sie sich widersprechen (6 Farben, Standard Violett/Grün, Qualle und Küken, „Alles erledigt“ nur nach einem Haken).
+- Aktuell: Ist nichts fällig oder rot (`calm`), kommt die ruhige Karte „Alles erledigt“, nicht bei Abwesenheit, vor dem Start oder ganz ohne eigene Aufgaben. Stern zeichnet sich nur beim Übergang, erst sobald die Erledigungen da sind (`S.compsReady`), nicht beim Öffnen.
+- Als Nächstes (`nextRounds`): je Aufgabe und Slot die nächste eigene Runde in 7 Tagen, nur `owner === me`, ohne Tägliches und Bei Bedarf, Termin vor dem nächsten Tauschtag; Verschobenes und Termine in der Abwesenheit nur, wenn schon erledigt. Der Haken nutzt `data-key` (Schlüssel des Termins), `day` bleibt der Tag des Abhakens. Balken, Serie und Ziel zählen dadurch im Zeitraum des Termins, Verlauf und Kalender am Tag des Abhakens. Gemeinsames Kommendes bleibt unter „Aufgaben“. Teilschritte stehen dort nicht.
+- Stern: `dayStar` beim ersten Aufgaben-Haken des Tages „Guter Start!“, 1,8 s, bei „Bewegung reduzieren“ 0,8 s; einmal pro Tag und Gerät (`fairplan.star-day`). Abmachungen lösen ihn nicht aus; beim ersten Haken eines Plans kommt stattdessen „Der Anfang ist gemacht!“.
+- Farben: `PALETTE` (Reihenfolge nach Verlauf), `COLOR_SUGGESTIONS`, `suggestColor`. `migrateColors` rechnet nur beim Lesen um (gelb, gold → senf; rot → koralle; sonst nächste freie), die Datenbank ändert sich erst, wenn jemand Personen speichert. Kontraste prüft `tests/colors.test.js` direkt aus `styles.css`. Der Stern hat die Personenfarbe, einen goldenen gibt es nicht.
+- Tiere sind gefüllte Formen mit Linien, nicht nur Umrisse; neu Krabbe, Biene, Schildkröte, Oktopus.
+- Voller Haushalt: Die App weiß nicht, wer auf welchem Gerät ist, „voll“ ist daher nicht erkennbar und ein Beitritt nicht sperrbar. `fullNote` steht unter Mehr › Haushalt, beim Code und bei „Wer bist du?“. Von dort `newGuestHome` (`st.guest`): neuer Haushalt ohne `movedTo`, der fremde merkt nichts.
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.
