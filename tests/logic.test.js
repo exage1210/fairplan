@@ -7,7 +7,7 @@ import {
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
   personalWeek, isPressing, goalOf, goalStats, goalResult,
   jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX, PACKAGES, isPackage, swapsByRound, upsertHome,
-  nextRounds, migrateColors, suggestColor, PALETTE,
+  nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -975,4 +975,78 @@ test('Farben umstellen: ähnlichste neue, Violett bleibt, keine doppelten', () =
   const all = migrateColors(ps('rot', 'gold', 'gelb', 'schwarz', 'weiss', 'rosa')).map((p) => p.color);
   assert.equal(new Set(all).size, 6);
   assert.ok(all.every((c) => PALETTE.includes(c)));
+});
+
+// ---------- Rückgängig ----------
+test('Joker zurücknehmen: dritter nur durch den Haken, der ihn gebracht hat', () => {
+  const j = { ...jokerOf({}, 'p1'), count: 2, earned: 2, progress: 29 };
+  const full = jokerTick(j, 1, 'c30');
+  assert.equal(full.count, JOKER_MAX);
+  assert.equal(full.earnedBy, 'c30');
+  assert.equal(jokerTick(full, -1, 'anderer'), full); // zählte bei vollem Vorrat nicht
+  assert.equal(jokerTick(full, -1), full);
+  const back = jokerTick(full, -1, 'c30');
+  assert.deepEqual([back.count, back.progress, back.earned, back.earnedBy], [2, 29, 2, null]);
+  const again = jokerTick(back, 1, 'c31'); // wieder verdient
+  assert.deepEqual([again.count, again.earned], [3, 3]);
+});
+
+test('Joker zurücknehmen: schon eingesetzt ergibt ein Minus, das die nächste Abmachung ausgleicht', () => {
+  const used = { ...jokerOf({}, 'p1'), earned: 1, count: 0, progress: 0, deferred: { x: '2026-11-01' } };
+  const minus = jokerTick(used, -1, 'c');
+  assert.deepEqual([minus.progress, minus.count, minus.earned, minus.deferred], [-1, 0, 1, { x: '2026-11-01' }]);
+  assert.equal(jokerTick(minus, 1, 'd').progress, 0);
+  // der 30. Haken nach einem Minus bringt erst beim 31. den Joker
+  let j = minus;
+  for (let i = 0; i < JOKER_PRICE; i++) j = jokerTick(j, 1, `c${i}`);
+  assert.equal(j.count, 0);
+  assert.equal(jokerTick(j, 1, 'z').count, 1);
+});
+
+const stats = (over = {}) => ({ longest: 0, longestDay: null, done: {}, start: null, ...over });
+const facts = (over = {}) => ({ now: {}, longest: 0, started: true, setup: '2026-10-26', ...over });
+
+test('Meilenstein zurücknehmen: nur wenn die Grundlage weg ist und er nicht vor dem Haken erreicht wurde', () => {
+  const st = stats({ done: { first: '2026-11-01', tasks100: '2026-11-01', extra100: '2026-11-01', week: '2026-10-31' } });
+  const u = { day: '2026-11-01', rule: false };
+  const next = revokeStats(st, u, facts({ now: { first: true, tasks100: false, week: false } }));
+  assert.deepEqual(next.done, { first: '2026-11-01', extra100: '2026-11-01', week: '2026-10-31' });
+  assert.equal(revokeStats(st, u, facts({ now: { first: true, tasks100: true } })), st); // alles stimmt noch: dieselben Daten
+  const r = revokeStats(st, { day: '2026-11-01', rule: true }, facts({ now: {} }));
+  assert.deepEqual(r.done, { first: '2026-11-01', tasks100: '2026-11-01', week: '2026-10-31' }); // Abmachung betrifft nur extra und Joker
+});
+
+test('Serie zurücknehmen: die längste sinkt mit, ältere bleibt', () => {
+  const u = { day: '2026-11-07', rule: false };
+  const reached = stats({ longest: 4, longestDay: '2026-11-07', done: { week4: '2026-11-07' } });
+  const next = revokeStats(reached, u, facts({ now: { week4: false }, longest: 3 }));
+  assert.deepEqual([next.longest, next.done], [3, {}]);
+  const old = stats({ longest: 9, longestDay: '2026-05-01', done: { week4: '2026-03-01' } });
+  assert.equal(revokeStats(old, u, facts({ now: { week4: false }, longest: 2 })), old); // aus einem früheren Plan
+});
+
+test('Der Anfang: Stern kommt wieder, wenn der einzige Haken zurückgenommen wurde', () => {
+  const st = stats({ start: '2026-10-26' });
+  assert.equal(revokeStats(st, { day: '2026-11-01', rule: false }, facts({ started: false })).start, null);
+  assert.equal(revokeStats(st, { day: '2026-11-01', rule: false }, facts()), st);
+  assert.equal(revokeStats(st, { day: '2026-11-01', rule: true }, facts({ started: false })), st);
+});
+
+test('Ziel zurücknehmen: nur der betroffene Monat, frühere Pläne bleiben', () => {
+  const t = task({ assign: 'A' });
+  const c = ctx({ setup: '2026-09-01', goal: { percent: 100, reward: '' } });
+  const windows = windowsBetween(t, c, '2026-10-01', '2026-10-31').filter((w) => w.start >= '2026-10-01');
+  const done = new Map(windows.map((w) => [completionId(t.id, w.key, w.slot), { by: 'p1' }]));
+  const hits = { '2026-10': 'Essen', '2026-05': '' };
+  assert.equal(revokeGoalHits(hits, [t], c, '2026-11-01', done), hits); // reicht noch
+  done.delete(completionId(t.id, windows[0].key, windows[0].slot));
+  assert.deepEqual(revokeGoalHits(hits, [t], c, '2026-11-01', done), { '2026-05': '' });
+  assert.equal(revokeGoalHits(hits, [t], c, '2026-12-15', done), hits); // Haken liegt zu weit weg
+  assert.equal(revokeGoalHits(hits, [t], ctx({ setup: '2026-10-25', goal: { percent: 100 } }), '2026-11-01', done), hits); // Plan neu eingerichtet
+});
+
+test('Haushalt voll: erst wenn jede Person einmal da war', () => {
+  assert.equal(householdFull(ctx()), false);
+  assert.equal(householdFull(ctx({ seen_p1: '2026-11-01' })), false);
+  assert.equal(householdFull(ctx({ seen_p1: '2026-11-01', seen_p2: '2026-11-02' })), true);
 });

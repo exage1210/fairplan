@@ -23,7 +23,7 @@ const DARK = { bg: hex('--bg', dark), surface: hex('--surface', dark) };
 const LIGHT = { bg: hex('--bg', light), surface: hex('--surface', light) };
 
 for (const c of PALETTE) {
-  const block = css.match(new RegExp(`\\[data-accent="${c}"\\] \\{[^}]*\\}`))?.[0];
+  const block = css.match(new RegExp(`\\[data-accent="${c}"\\], \\[data-c="${c}"\\] \\{[^}]*\\}`))?.[0];
   test(`Farbe ${c}: lesbar in Dunkel, Hell und Farbe`, () => {
     assert.ok(block, 'Akzent fehlt');
     const base = hex(`--c-${c}`), strong = hex(`--s-${c}`), text = hex('--a-text', block);
@@ -36,6 +36,9 @@ for (const c of PALETTE) {
     atLeast(strong, LIGHT.surface, 4.5, 'Hell Text auf Kachel');
     atLeast(strong, LIGHT.bg, 4.5, 'Hell Text');
     atLeast('#ffffff', strong, 4.5, 'Hell Knopfschrift');
+    // Tier auf zarter Tönung, Hell und Farbe gleich
+    atLeast(base, hex('--a-soft', block), 3, 'Dunkel Tier');
+    atLeast(strong, hex('--a-soft-l', block), 3, 'Hell Tier');
     // Farbe: eigene Tönung
     const zBg = hex('--z-bg', block), zSurf = hex('--z-surf', block);
     atLeast(strong, zBg, 4.5, 'Farbe Text');
