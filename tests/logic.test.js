@@ -7,6 +7,7 @@ import {
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
   personalWeek, isPressing, goalOf, goalStats, goalResult,
   jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX, PACKAGES, isPackage, swapsByRound, upsertHome,
+  nextRounds, migrateColors, suggestColor, PALETTE,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -889,4 +890,89 @@ test('Start in der Zukunft: vorher nichts fällig oder rot, erster Tausch frühe
   assert.deepEqual(weekStreaks([t], c, 'p1', new Map(), '2026-11-25', '2026-11-10'), { current: 0, longest: 0 });
   // Start mitten im Monat mit genug Zeit: Tausch am nächsten Ersten
   assert.equal(nextSwap({ rotateFrom: rotationBase('2026-11-10') }, '2026-11-10'), '2026-12-01');
+});
+
+// ---------- Vorher abhaken ----------
+const rounds = (tasks, c, today, done = new Map(), me = 'p1') => nextRounds(tasks, c, me, today, done);
+
+test('Vorher abhaken: nächste eigene Runde in 7 Tagen, ohne Tägliches, Bei Bedarf, Gemeinsames und Fremdes', () => {
+  const list = [
+    task({ id: 'w', assign: 'A' }), task({ id: 'b', assign: 'B' }), task({ id: 's', assign: 'shared' }),
+    task({ id: 'd', n: 1, unit: 'day', assign: 'A' }), task({ id: 'n', n: 0, unit: 'need', assign: 'A' }),
+  ];
+  const r = rounds(list, ctx(), '2026-11-01');
+  assert.deepEqual(r.map((x) => [x.task.id, x.due, x.status]), [['w', '2026-11-07', 'upcoming']]);
+  assert.deepEqual(rounds(list, ctx(), '2026-11-07').map((x) => x.due), ['2026-11-14']); // heute zählt nicht als „nächste“
+  assert.deepEqual(rounds([task({ id: 'p', assign: 'each' })], ctx(), '2026-11-01').map((x) => x.slot), ['p1']);
+});
+
+test('Vorher abhaken: nie ab dem nächsten Tauschtag', () => {
+  const c = ctx({ rotateFrom: '2026-11' });
+  const t = task({ assign: 'A' });
+  assert.equal(nextSwap(c, '2026-11-24'), '2026-12-01');
+  assert.deepEqual(rounds([t], c, '2026-11-24').map((x) => x.due), ['2026-11-28']);
+  assert.deepEqual(rounds([t], c, '2026-11-29'), []); // Termin 5.12. liegt nach dem Tausch
+  assert.deepEqual(rounds([t], ctx(), '2026-11-29').map((x) => x.due), ['2026-12-05']); // ohne Tausch keine Grenze
+});
+
+test('Vorher abhaken: Monatliches über die Periode hinaus, Haken zählt für diesen Termin', () => {
+  const t = task({ n: 1, unit: 'month', assign: 'A' });
+  const [r] = rounds([t], ctx(), '2026-11-30');
+  assert.equal(r.due, '2026-12-05');
+  const id = completionId(t.id, r.key, r.slot);
+  const c = { id, by: 'p1', day: '2026-11-30', taskId: t.id, key: r.key };
+  const done = new Map([[id, c]]);
+  assert.equal(rounds([t], ctx(), '2026-11-30', done)[0].status, 'done');
+  assert.equal(evaluate(t, ctx(), '2026-12-05', done)[0].status, 'done');
+  assert.ok(dueBetween([t], ctx(), '2026-12-01', '2026-12-31', done, 'p1')[0].done);
+  assert.equal(goalStats([t], ctx(), '2026-12', done).percent, 100);
+  assert.equal(dueBetween([t], ctx(), '2026-11-01', '2026-11-30', done, 'p1')[0].done, null); // November bleibt offen
+});
+
+test('Vorher abhaken: Wöchentliches gilt für die Woche des Termins und in der Serie', () => {
+  const t = task({ assign: 'A' });
+  const c0 = ctx({ persons: [{ id: 'p1', name: 'Anna', days: [5] }, { id: 'p2', name: 'Ben', days: [5] }] });
+  const key = (today) => rounds([t], c0, today)[0].key;
+  const mk = (k, day) => { const id = completionId(t.id, k, null); return [id, { id, by: 'p1', day, taskId: t.id, key: k }]; };
+  const done = new Map([mk(key('2026-10-30'), '2026-10-30'), mk(key('2026-11-02'), '2026-11-02')]);
+  assert.equal(evaluate(t, c0, '2026-11-07', done)[0].status, 'done');
+  assert.equal(dueBetween([t], c0, '2026-11-07', '2026-11-13', done, 'p1')[0].done.day, '2026-11-02');
+  assert.equal(weekStreaks([t], c0, 'p1', done, '2026-10-28', '2026-11-13').current, 2);
+});
+
+test('Vorher abhaken: Abwesenheit, Joker und Saison', () => {
+  const t = task({ assign: 'A' });
+  const away = ctx({ away: { p1: { from: '2026-11-06', to: '2026-11-08' } } });
+  assert.deepEqual(rounds([t], away, '2026-11-01'), []);
+  const off = task({ assign: 'A', season: { from: 3, to: 5 } });
+  assert.deepEqual(rounds([off], ctx(), '2026-11-01'), []);
+  const r = rounds([t], ctx(), '2026-11-01')[0];
+  const joker = ctx({ joker_p1: { deferred: { [completionId(t.id, r.key, null)]: '2026-11-01' } } });
+  assert.deepEqual(rounds([t], joker, '2026-11-01'), []);
+});
+
+// ---------- Personenfarben ----------
+test('Farbvorschlag: Reihenfolge, Vergebenes wird übersprungen', () => {
+  assert.equal(suggestColor([]), 'koralle');
+  assert.equal(suggestColor(['koralle']), 'tuerkis');
+  assert.equal(suggestColor(['koralle', 'violett']), 'tuerkis');
+  assert.equal(suggestColor(['koralle', 'tuerkis', 'violett', 'senf', 'blau']), 'gruen');
+  assert.equal(PALETTE.length, 8);
+});
+
+test('Farben umstellen: ähnlichste neue, Violett bleibt, keine doppelten', () => {
+  const ps = (...c) => c.map((color, i) => ({ id: `p${i}`, color }));
+  const colors = (...c) => migrateColors(ps(...c)).map((p) => p.color);
+  const same = ps('violett', 'gruen');
+  assert.equal(migrateColors(same), same); // nichts zu tun: dieselbe Liste
+  assert.deepEqual(colors('violett', 'gelb'), ['violett', 'senf']);
+  assert.deepEqual(colors('rot', 'blau'), ['koralle', 'blau']);
+  assert.deepEqual(colors('gelb', 'gold'), ['senf', 'koralle']); // gold will auch senf → nächster freier Vorschlag
+  assert.deepEqual(colors('schwarz', 'weiss'), ['koralle', 'tuerkis']);
+  assert.deepEqual(colors('gruen', 'gruen'), ['gruen', 'koralle']);
+  assert.deepEqual(colors('senf', 'gelb'), ['senf', 'koralle']);
+  assert.deepEqual(migrateColors([{ id: 'a', color: 'gelb', name: 'X', days: [1] }])[0], { id: 'a', color: 'senf', name: 'X', days: [1] });
+  const all = migrateColors(ps('rot', 'gold', 'gelb', 'schwarz', 'weiss', 'rosa')).map((p) => p.color);
+  assert.equal(new Set(all).size, 6);
+  assert.ok(all.every((c) => PALETTE.includes(c)));
 });
