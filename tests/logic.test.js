@@ -7,7 +7,7 @@ import {
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
   personalWeek, isPressing, goalOf, goalStats, goalResult,
   jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX, PACKAGES, isPackage, swapsByRound, upsertHome,
-  nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull, colorName, colorLabel, urgency,
+  nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull, colorName, colorLabel, urgency, pauseDuring, currentPause, setPause, endPause, pausedItem, changeAway, moveRange,
 } from '../js/logic.js';
 
 // 28.10.2026 ist ein Mittwoch; Putztag Standard Samstag (31.10., 7.11., 14.11. …)
@@ -1067,4 +1067,113 @@ test('Aktuell: Vergessenes zuerst, dann was drängt, was Zeit hat, was erst komm
   const soon = { task: w, status: 'upcoming', due: '2026-11-07', end: '2026-11-13' };
   const order = [soon, later, now, late].sort((a, b) => urgency(a, today) - urgency(b, today));
   assert.deepEqual(order, [late, now, later, soon]);
+});
+
+// ---------- Haushalt pausieren ----------
+const inPause = (over = {}) => ctx({ pauses: [{ from: '2026-11-09', to: '2026-11-22' }], persons: [{ id: 'p1', name: 'Anna', days: [5] }, { id: 'p2', name: 'Ben', days: [5] }], ...over });
+
+test('Pause: nichts wird rot, auch Gemeinsames, ohne Abwesenheit', () => {
+  const p = inPause();
+  for (const t of [task({ assign: 'A' }), task({ assign: 'B' }), task({ assign: 'shared' }), task({ n: 1, unit: 'month', assign: 'shared' })]) {
+    const key = windowsBetween(t, p, '2026-11-01', '2026-11-08').filter((w) => w.start < '2026-11-09').map((w) => [w.key, w.slot]);
+    assert.notEqual(one(t, p, '2026-11-25', key).status, 'overdue');
+  }
+  assert.equal(one(task({ assign: 'A' }), ctx(), '2026-11-25').status, 'overdue'); // ohne Pause schon
+});
+
+test('Pause: Zeile fällt weg, auch Tägliches und Fremdes; vorher nur, was hineinfällt', () => {
+  const p = inPause();
+  const d = { task: task({ n: 1, unit: 'day' }), status: 'due', due: '2026-11-10', end: '2026-11-10' };
+  assert.equal(pausedItem(d, p, '2026-11-10'), true);
+  const w = { task: task({ assign: 'A' }), status: 'due', due: '2026-11-07', end: '2026-11-13' };
+  assert.equal(pausedItem(w, p, '2026-11-08'), false); // Termin vor der Pause: läuft noch
+  assert.equal(pausedItem(w, p, '2026-11-09'), true);
+  const m = { task: task({ n: 1, unit: 'month' }), status: 'upcoming', due: '2026-11-14', end: '2026-11-19' };
+  assert.equal(pausedItem(m, p, '2026-11-05'), true);
+  assert.equal(pausedItem(w, ctx(), '2026-11-10'), false);
+});
+
+test('Pause: Serie, Ziel, Balken und Vorher abhaken zählen pausierte Termine nicht', () => {
+  const t = task({ assign: 'A', created: '2026-10-05' });
+  const p = inPause({ setup: '2026-10-05' });
+  const off = ctx({ setup: '2026-10-05' });
+  assert.equal(dueBetween([t], p, '2026-11-14', '2026-11-20', new Map(), 'p1').length, 0);
+  assert.equal(dueBetween([t], off, '2026-11-14', '2026-11-20', new Map(), 'p1').length, 1);
+  assert.ok(goalStats([t], p, '2026-11', new Map()).total < goalStats([t], off, '2026-11', new Map()).total);
+  assert.deepEqual(nextRounds([t], p, 'p1', '2026-11-12', new Map()), []);
+  const done = new Map(windowsBetween(t, p, '2026-10-05', '2026-12-05')
+    .filter((w) => w.start < '2026-11-09' || w.start > '2026-11-22')
+    .map((w) => { const id = completionId(t.id, w.key, w.slot); return [id, { id, by: 'p1', key: w.key, day: w.start }]; }));
+  const withPause = weekStreaks([t], p, 'p1', done, '2026-10-05', '2026-12-06');
+  assert.equal(withPause.current, withPause.longest);
+  assert.ok(withPause.current >= 6);
+  assert.equal(weekStreaks([t], off, 'p1', done, '2026-10-05', '2026-12-06').current < withPause.current, true); // ohne Pause bricht sie
+});
+
+test('Pause: unabhängig von der Abwesenheit, beide dürfen sich überschneiden', () => {
+  const p = inPause({ away: { p1: { from: '2026-11-20', to: '2026-11-30' } } });
+  assert.equal(awayDuring(p, 'p1', toDay('2026-11-10'), toDay('2026-11-10')), false); // Pause ist keine Abwesenheit
+  assert.equal(awayDuring(p, 'p2', toDay('2026-11-25'), toDay('2026-11-25')), false);
+  assert.equal(pauseDuring(p, toDay('2026-11-25'), toDay('2026-11-25')), false);
+  assert.equal(dueBetween([task({ assign: 'A' })], p, '2026-11-28', '2026-12-03', new Map(), 'p1').length, 0); // Abwesenheit wirkt danach weiter
+});
+
+test('Pause setzen, ändern, beenden; vergangene bleiben', () => {
+  let l = setPause([], 'from', '2026-11-09', '2026-11-01');
+  assert.deepEqual(l, [{ from: '2026-11-09', to: '2026-11-09' }]);
+  l = setPause(l, 'to', '2026-11-22', '2026-11-01');
+  assert.deepEqual(l, [{ from: '2026-11-09', to: '2026-11-22' }]);
+  assert.deepEqual(setPause(l, 'to', '2026-11-05', '2026-11-01'), [{ from: '2026-11-05', to: '2026-11-05' }]); // das geänderte Datum gewinnt
+  assert.deepEqual(endPause(l, '2026-11-01'), []); // noch nicht begonnen
+  assert.deepEqual(endPause(l, '2026-11-15'), [{ from: '2026-11-09', to: '2026-11-14' }]); // Bisheriges bleibt pausiert
+  const old = [{ from: '2026-08-01', to: '2026-08-14' }];
+  const two = setPause(old, 'from', '2026-12-20', '2026-11-01');
+  assert.equal(two.length, 2);
+  assert.ok(pauseDuring({ pauses: two }, toDay('2026-08-05'), toDay('2026-08-05'))); // die alte gilt weiter
+  assert.equal(currentPause({ pauses: old }, '2026-11-01'), null);
+  assert.deepEqual(endPause(old, '2026-11-01'), old);
+});
+
+// ---------- Abwesenheit bleibt ----------
+test('Abwesenheit: eine neue macht die vergangene nicht ungültig', () => {
+  const t = task({ assign: 'A', created: '2026-09-07' });
+  const persons = [{ id: 'p1', name: 'Anna', days: [5] }, { id: 'p2', name: 'Ben', days: [5] }];
+  const first = ctx({ setup: '2026-09-07', persons, away: { p1: { from: '2026-11-09', to: '2026-11-22' } } });
+  const done = new Map(windowsBetween(t, first, '2026-10-01', '2026-12-05')
+    .filter((w) => w.start >= '2026-10-31' && (w.start < '2026-11-14' || w.start > '2026-11-21'))
+    .map((w) => { const id = completionId(t.id, w.key, w.slot); return [id, { id, by: 'p1', key: w.key, day: w.start }]; }));
+  const before = weekStreaks([t], first, 'p1', done, '2026-10-26', '2026-12-06');
+  const later = { ...first, ...changeAway(first, 'p1', { from: '2027-01-11', to: '2027-01-20' }, '2026-12-06') };
+  assert.deepEqual(weekStreaks([t], later, 'p1', done, '2026-10-26', '2026-12-06'), before);
+  assert.deepEqual(later.awayPast.p1, [{ from: '2026-11-09', to: '2026-11-22' }]);
+  assert.deepEqual(later.away.p1, { from: '2027-01-11', to: '2027-01-20' });
+  assert.equal(awayDuring(later, 'p1', toDay('2026-11-15'), toDay('2026-11-15')), true);
+  assert.equal(awayDuring(later, 'p2', toDay('2026-11-15'), toDay('2026-11-15')), false);
+});
+
+test('Abwesenheit ändern: nur Vergangenes bleibt, Künftiges lässt sich frei ändern und löschen', () => {
+  const a = { away: { p1: { from: '2026-11-09', to: '2026-11-22' } } };
+  assert.equal(changeAway(a, 'p1', {}, '2026-11-01').awayPast, undefined); // noch nicht begonnen
+  const mid = changeAway(a, 'p1', {}, '2026-11-15'); // mitten drin gelöscht
+  assert.deepEqual(mid.awayPast.p1, [{ from: '2026-11-09', to: '2026-11-14' }]);
+  assert.deepEqual(mid.away.p1, {});
+  assert.equal(awayDuring({ ...a, ...mid }, 'p1', toDay('2026-11-16'), toDay('2026-11-16')), false); // ab heute wieder da
+  const twice = { ...a, ...mid, away: { p1: { from: '2026-11-09', to: '2026-11-12' } } };
+  assert.equal(changeAway(twice, 'p1', {}, '2026-11-15').awayPast, undefined); // schon abgedeckt: keine Doppelten
+  assert.deepEqual(changeAway({}, 'p1', { from: '2026-12-01', to: '2026-12-02' }, '2026-11-01'), { away: { p1: { from: '2026-12-01', to: '2026-12-02' } } });
+});
+
+test('Zeitraum ändern: das geänderte Datum gewinnt, nichts wird vertauscht', () => {
+  const r = { from: '2026-10-20', to: '2026-10-25' };
+  assert.deepEqual(moveRange(r, 'from', '2026-11-10'), { from: '2026-11-10', to: '2026-11-10' });
+  assert.deepEqual(moveRange(r, 'to', '2026-10-10'), { from: '2026-10-10', to: '2026-10-10' });
+  assert.deepEqual(moveRange(r, 'to', '2026-10-28'), { from: '2026-10-20', to: '2026-10-28' });
+  assert.deepEqual(moveRange(undefined, 'from', '2026-11-10'), { from: '2026-11-10', to: '2026-11-10' });
+  // neue Abwesenheit eintragen: keine Tage dazwischen werden entschuldigt
+  const a = { away: { p1: r } };
+  const step1 = { ...a, ...changeAway(a, 'p1', moveRange(r, 'from', '2026-11-10'), '2026-11-01') };
+  const step2 = { ...step1, ...changeAway(step1, 'p1', moveRange(step1.away.p1, 'to', '2026-11-15'), '2026-11-01') };
+  assert.deepEqual(step2.awayPast.p1, [r]);
+  assert.deepEqual(step2.away.p1, { from: '2026-11-10', to: '2026-11-15' });
+  assert.equal(awayDuring(step2, 'p1', toDay('2026-10-28'), toDay('2026-10-28')), false);
 });
