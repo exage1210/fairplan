@@ -376,12 +376,11 @@ div.mrow { cursor: default; flex-wrap: wrap; }
 .avopts img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
 .colors { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 6px; }
 .colors button {
-  min-height: 72px; padding: 8px 2px; border: 2px solid var(--surface); border-radius: 14px; background: var(--surface); color: var(--fg);
-  font-size: 12px; font-weight: 600; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 4px; text-align: center; min-width: 0;
+  min-height: 54px; padding: 6px 2px; border: 2px solid var(--surface); border-radius: 14px; background: var(--surface); color: var(--fg);
+  font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; min-width: 0;
 }
 .colors button[aria-pressed="true"] { border-color: var(--pt, var(--fg)); }
 .colors button:disabled { opacity: 0.4; cursor: not-allowed; }
-.colors small { display: block; font-size: 10px; font-weight: 400; color: var(--fg-2); }
 .colors .sw { margin-right: 0; }
 
 /* Filter & Wochentage */

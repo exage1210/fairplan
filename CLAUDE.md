@@ -158,6 +158,7 @@ Gilt vor älteren Einträgen oben („voll ist nicht erkennbar“, Haushalts-Cod
 - Voll (`householdFull`): Alle Personen stehen beim Anlegen fest; `seen_<id>` im Haushalt wird einmalig gesetzt, sobald die Person die App nutzt (`markSeen`). Voll = alle waren da. Beitritt bleibt ungesperrt. Ein Vermerk lässt sich nicht zurücknehmen.
 - Mehr › Personen (`haushalt`): nicht voll „Person einladen“ plus Textzeile zu neuem Haushalt; voll `fullNote` plus „Neues Handy? Code anzeigen“. Einladeseite `code`: großer QR, „Link teilen“ (ohne Teilen-Funktion kopiert er), Code klein. „Wer bist du?“ zeigt den Hinweis nur bei vollem Haushalt. Gemeinsames Ziel ist die eigene Seite `ziel`.
 - Tier-Icons: `[data-c]` setzt dieselben `--a-*` wie `[data-accent]`, daher je Person. Kreis `--a-soft` (hell/Farbe `--a-soft-l`), Tier `--a-base` (hell/Farbe `--a-strong`), auch in `.colors` und `.avopts`. Buchstaben-Avatare bleiben voll gefärbt.
+- Farbauswahl: nur Tiere, kein Text, auch kein „vergeben“ (ausgegraut). Name steht in der Überschrift („Deine Farbe: Violett“, `colorName`); Tiernamen sind nie sichtbar. `aria-label` „Koralle (Krabbe)“ (`colorLabel`), gesperrt mit „, vergeben an …“. Namen und Reihenfolge nur in `logic.js`.
 - Aktuell: Statuskarte · Abmachungen · Alles erledigt · Als Nächstes · Aufgaben · andere Personen · Bei Bedarf · Erledigt. Bei Bedarf eingeklappt „Bei Bedarf (N)“ mit grauer Zeile in der `summary`; `nowRow(..., plain)` nur Name und Haken, ohne Teilschritte.
 
 ## Offen / Ideen
