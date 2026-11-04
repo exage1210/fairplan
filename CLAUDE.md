@@ -189,6 +189,27 @@ Gilt vor „Personen an einem Ort“ (v46) oben.
 - Mehr › Personen: Liste · „Link oder QR teilen“ (Seite `code`, immer sichtbar, für Personen im Haushalt oder ein neues Handy) · „+ Person“ (`add-person`: `newHome(ADD_PERSON)`, nur diese eine Nachfrage, sonst der bestehende Weg). „Person einladen“, „Neues Handy?“ und die Textzeile sind weg.
 - `householdFull` steuert nur noch den Hinweis bei „Wer bist du?“ (`fullNote`, Gast-Weg ohne `movedTo`); Beitritt bleibt ungesperrt. Meine Haushalte behält die alte Nachfrage.
 
+## Fehler aus dem Funktionstest (1.11.2026, v50)
+Gilt vor „Haushalt pausieren“ oben, wo es sich widerspricht.
+- Pause und Abwesenheit nehmen nur heute oder später an (`min`, `refusePast`); das Feld zeigt dann wieder den gespeicherten Wert. Nachträglich eintragen geht nicht mehr, weil ein vergangener Eintrag nicht rücknehmbar wäre. `awayPast` und laufende Abwesenheiten wirken unverändert.
+- Abhaken speichert erst nach dem Wegrutschen (`S.pendingDone`); `undoCompletion` sagt ein noch nicht gespeichertes Abhaken nur ab.
+- „Rückgängig“ nach dem letzten Teilschritt nimmt die Aufgabe und diesen Schritt zurück (2/3); „Wieder öffnen“ nimmt weiter alle Schritte zurück.
+- Kaputter Einladungslink: Wer schon in einem Haushalt ist, bleibt dort (Hinweis, `?join=` weg). `me` und Akzent werden erst beim erfolgreichen Beitritt gelöscht.
+- Editor, Termin: Gibt es die Woche im Zeitraum nicht, zählt `dueDay` von vorn; die Auswahl sagt das („diesmal wie 1.“). Die Logik ist unverändert.
+
 ## Offen / Ideen
 - Daniel möchte die App weiter nach eigenen Wünschen optimieren.
 - Später (nicht V1): mehr als 2 Personen, faire Neuaufteilung nach Aufwand.
+
+## Wäsche und Bügeln (4.11.2026, v51)
+- Vorlage: „Wäsche“ (60) entfernt; Abmachung „Wäsche waschen“ in `TEMPLATE_RULES` und `RULE_COMMON` (ohne Trockner nicht an einem Tag); „Bügeln“ 45 Min. wöchentlich mit `when: 'buegeln'`. `IRONING` entfernt.
+- Unser Plan: `buegeln` in `OUR_HOME`, ca. 3,65 h/Woche. Bestehende Haushalte unverändert.
+
+## Fristen (4.11.2026, v52; Vault-Notiz „Prompt Fristen“)
+Gilt vor älteren Einträgen oben (Spielraum, persönliche Woche, „Aufgaben enthält auch, was diese Woche noch kommt“, Als Nächstes nur bei der ruhigen Karte und nur Eigenes, Abwesenheit ab heute).
+- `strictFrom` im Haushalt: Termine ab diesem Tag haben die neue Frist (`slackAt`, `STRICT_SLACK`): wöchentlich und alle 2 Wochen der Putztag selbst (`end = due`), monatlich, Quartal, Halbjahr, Jahr 7 Tage. Täglich, Bei Bedarf, Abmachungen und eigene Intervalle wie bisher (`slackOf`). Ältere Termine behalten die alte Frist. Neue Haushalte: Start des Plans; bestehende: das erste Gerät mit v52 setzt heute (`markStrict`).
+- Joker: Frist + 7 Tage, bei Wöchentlichem also genau eine Woche ab dem Putztag.
+- Abwesenheit und Pause entschuldigen über Termin bis Frist; bei Wöchentlichem muss die Abwesenheit daher den Putztag treffen. Abwesenheit lässt sich ab gestern eintragen (krank am Putztag), Pause weiter ab heute.
+- Aktuell: Hauptliste heißt „Heute“ und enthält nur Vergessenes und Fälliges (Monatliches und Selteneres nach dem Termin mit „noch bis …“). Was erst kommt, steht unter „Als Nächstes“ (`nextRounds`, jetzt auch Gemeinsames; immer da, offen bei der ruhigen Karte, sonst eingeklappt; erst wenn die laufende Runde derselben Aufgabe erledigt ist). Ein Haken bei Gemeinsamem dort zählt für niemanden Bestimmten (`data-shared`). Termin ohne Spielraum zeigt nur das Datum (`termText`).
+- `isPressing` unverändert: mit den neuen Fristen ist Wöchentliches nur am Putztag „due“.
+- Spürbar: Serie bricht am Tag nach einem verpassten Putztag (Nachholen bis zum nächsten Termin rettet sie weiter); Monatsergebnis steht früher fest; Monatliches hat 7 statt 5 Tage, Selteneres 7 statt 14.
