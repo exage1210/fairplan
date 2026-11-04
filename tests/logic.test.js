@@ -5,7 +5,7 @@ import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, inSeason, windowsBetween, awayDuring,
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
-  personalWeek, isPressing, goalOf, goalStats, goalResult, slackAt,
+  personalWeek, isPressing, goalOf, goalStats, goalResult, slackAt, awayExcuses,
   jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX, PACKAGES, isPackage, swapsByRound, upsertHome,
   nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull, colorName, colorLabel, urgency, pauseDuring, currentPause, setPause, endPause, pausedItem, changeAway, moveRange,
 } from '../js/logic.js';
@@ -1247,4 +1247,24 @@ test('Vorher abhaken: Gemeinsames pausiert nur, wenn alle weg sind', () => {
   assert.deepEqual(rounds([s], one_, '2026-11-01').map((x) => x.due), ['2026-11-07']);
   const both = ctx({ away: { p1: { from: '2026-11-06', to: '2026-11-08' }, p2: { from: '2026-11-06', to: '2026-11-08' } } });
   assert.deepEqual(rounds([s], both, '2026-11-01'), []);
+});
+
+test('Fristen: Monatliches drängt nur am Termin und an den letzten 2 Tagen', () => {
+  const c = ctx({ strictFrom: '2026-10-28' });
+  const m = task({ n: 1, unit: 'month' }); // Termin Sa 7.11., Frist 14.11.
+  const on = (d) => isPressing(one(m, c, d), d);
+  assert.deepEqual(['2026-11-07', '2026-11-08', '2026-11-11', '2026-11-12', '2026-11-14', '2026-11-15'].map(on),
+    [true, false, false, true, true, true]); // 15.11. ist rot
+});
+
+test('Fristen: Abwesenheit entschuldigt Monatliches nur bis zum Fristende', () => {
+  const m = task({ n: 1, unit: 'month', assign: 'A' });
+  const c = (from, to) => ctx({ strictFrom: '2026-10-28', away: { p1: { from, to } } });
+  assert.equal(one(m, c('2026-11-07', '2026-11-07'), '2026-11-15').status, 'overdue'); // ein Tag krank: noch 6 Tage Zeit
+  assert.equal(one(m, c('2026-11-10', '2026-11-16'), '2026-11-15').status, 'idle'); // bis zum Fristende weg
+  assert.equal(awayExcuses(c('2026-11-07', '2026-11-07'), m, 'p1', toDay('2026-11-07'), toDay('2026-11-14')), false);
+  // Alte Frist (vor dem Stichtag): wie bisher genügt eine Berührung
+  assert.equal(awayExcuses(ctx({ away: { p1: { from: '2026-11-07', to: '2026-11-07' } } }), m, 'p1', toDay('2026-11-07'), toDay('2026-11-12')), true);
+  // Wöchentliches: der Putztag zählt
+  assert.equal(awayExcuses(c('2026-11-07', '2026-11-07'), task({ assign: 'A' }), 'p1', toDay('2026-11-07'), toDay('2026-11-07')), true);
 });
