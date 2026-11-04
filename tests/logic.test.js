@@ -490,9 +490,20 @@ test('persönliche Woche: verpasst wird am nächsten Termin rot, bei der Person,
   const late = one(t, moSo(), '2026-11-09');
   assert.deepEqual([late.status, late.owner, late.due, late.key], ['overdue', 'p1', '2026-11-02', 'weekly:2026-11-09']);
   assert.equal(one(t, moSo(), '2026-11-09', [['weekly:2026-11-09', null]]).status, 'done');
-  // über den Tausch: Montag 30.11. verpasst → am Sonntag 6.12. rot bei p1
-  const swap = one(t, moSo(), '2026-12-06', [['weekly:2026-11-23', null]]);
-  assert.deepEqual([swap.status, swap.owner, swap.key], ['overdue', 'p1', 'weekly:2026-11-30b']);
+});
+
+test('Tausch: verpasster Termin bleibt eigene Zeile, die Runde der anderen Person läuft daneben', () => {
+  const t = wk();
+  const all = (done) => evaluate(t, moSo(), '2026-12-06', new Map(done.map(([k]) => [completionId('w', k, null), { by: 'p1' }])));
+  // Montag 30.11. (p1) verpasst, am Sonntag 6.12. ist p2 dran
+  const [a, b] = all([['weekly:2026-11-23']]);
+  assert.deepEqual([a.status, a.owner, a.key], ['overdue', 'p1', 'weekly:2026-11-30']);
+  assert.deepEqual([b.status, b.owner, b.key], ['due', 'p2', 'weekly:2026-11-30b']);
+  // p1 holt nach: zählt für den eigenen Termin, die Runde von p2 bleibt offen
+  const after = all([['weekly:2026-11-23'], ['weekly:2026-11-30']]);
+  assert.deepEqual(after.map((i) => [i.owner, i.status]), [['p2', 'due']]);
+  // Ohne Tausch bleibt es eine Zeile
+  assert.equal(evaluate(t, moSo({ rotateFrom: null }), '2026-11-09', new Map()).length, 1);
 });
 
 test('persönliche Woche: bisherige Erledigungen bleiben gültig, nichts wird doppelt fällig', () => {
@@ -674,12 +685,13 @@ test('Joker wöchentlich: nicht rot, ein Eintrag bei der Person, ein Haken für 
   assert.equal(one(t, c, '2026-11-12', [['weekly:2026-11-09', null]]).status, 'done');
 });
 
-test('Joker über den Tausch: bleibt bei der Person, Haken deckt die Runde der anderen ab', () => {
+test('Joker über den Tausch: bleibt bei der Person und zählt für ihren Termin, die Runde der anderen läuft daneben', () => {
   const t = wk();
   const c = withJoker(moSo(), 'p1', completionId('w', 'weekly:2026-11-30', null));
   const it = one(t, c, '2026-12-06', [['weekly:2026-11-23', null]]);
-  assert.deepEqual([it.status, it.owner, it.key, it.deferred], ['due', 'p1', 'weekly:2026-11-30b', true]);
-  assert.equal(one(t, c, '2026-12-06', [['weekly:2026-11-23', null], ['weekly:2026-11-30b', null]]).status, 'done');
+  assert.deepEqual([it.status, it.owner, it.key, it.deferred], ['due', 'p1', 'weekly:2026-11-30', true]);
+  const rest = evaluate(t, c, '2026-12-06', new Map([[completionId('w', 'weekly:2026-11-23', null), {}], [completionId('w', 'weekly:2026-11-30', null), {}]]));
+  assert.deepEqual(rest.map((i) => [i.owner, i.status]), [['p2', 'due']]);
 });
 
 test('Joker alle 2 Wochen und monatlich: Frist 7 Tage länger', () => {
