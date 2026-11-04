@@ -213,3 +213,11 @@ Gilt vor älteren Einträgen oben (Spielraum, persönliche Woche, „Aufgaben en
 - Aktuell: Hauptliste heißt „Heute“ und enthält nur Vergessenes und Fälliges (Monatliches und Selteneres nach dem Termin mit „noch bis …“). Was erst kommt, steht unter „Als Nächstes“ (`nextRounds`, jetzt auch Gemeinsames; immer da, offen bei der ruhigen Karte, sonst eingeklappt; erst wenn die laufende Runde derselben Aufgabe erledigt ist). Ein Haken bei Gemeinsamem dort zählt für niemanden Bestimmten (`data-shared`). Termin ohne Spielraum zeigt nur das Datum (`termText`).
 - `isPressing` unverändert: mit den neuen Fristen ist Wöchentliches nur am Putztag „due“.
 - Spürbar: Serie bricht am Tag nach einem verpassten Putztag (Nachholen bis zum nächsten Termin rettet sie weiter); Monatsergebnis steht früher fest; Monatliches hat 7 statt 5 Tage, Selteneres 7 statt 14.
+
+## Nach dem Fristen-Test (4.11.2026, v53)
+Gilt vor „Fristen“ oben, wo es sich widerspricht.
+- Joker-Knopf: Wöchentliches und alle 2 Wochen erst, wenn es rot ist; sonst wie bisher in den letzten 2 Tagen der Frist.
+- Abwesenheit (`awayExcuses`): Monatliches und Selteneres mit neuer Frist ist nur entschuldigt, wenn die Abwesenheit das Fristende einschließt; Wöchentliches, wenn sie den Putztag trifft; alte Fristen wie bisher. Haushalts-Pause unverändert (Berührung genügt).
+- `isPressing`: Monatliches und Selteneres drängt am Termin und an den letzten 2 Tagen der Frist; dazwischen nur in der Liste. Statuskarte dann „Heute drängt nichts“ mit „N Aufgaben haben noch Zeit.“
+- Aktuell: Rückstände als eigene Gruppe „Nachholen“ über „Heute“.
+- Beim Testen behoben: Joker-Prüfung lief auch für „Bei Bedarf“ (ohne Frist) und ließ die App hängen; jetzt erst nach den anderen Bedingungen.
