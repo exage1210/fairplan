@@ -221,3 +221,9 @@ Gilt vor „Fristen“ oben, wo es sich widerspricht.
 - `isPressing`: Monatliches und Selteneres drängt am Termin und an den letzten 2 Tagen der Frist; dazwischen nur in der Liste. Statuskarte dann „Heute drängt nichts“ mit „N Aufgaben haben noch Zeit.“
 - Aktuell: Rückstände als eigene Gruppe „Nachholen“ über „Heute“.
 - Beim Testen behoben: Joker-Prüfung lief auch für „Bei Bedarf“ (ohne Frist) und ließ die App hängen; jetzt erst nach den anderen Bedingungen.
+
+## Tausch getrennt (4.11.2026, v54)
+Gilt vor „Joker über den Tausch“ und „ein Haken für beide“ oben.
+- `evaluateRolling`: Gehört die laufende Runde einer anderen Person als der verpasste vorige Termin (Tausch), entstehen zwei Zeilen: der verpasste Termin bei seiner Person, ihr Haken zählt für ihn (`key` = eigener Termin); daneben die Runde der anderen Person wie gewohnt. Ohne Personenwechsel unverändert eine Zeile. `evaluate` kann je Slot also zwei Einträge liefern; Haken, Joker und Teilschritte finden ihre Zeile über `data-term` (`findItem`).
+- Joker über den Tausch: Der verschobene Termin bleibt bei der Person und zählt für sich, die neue Runde der anderen läuft daneben.
+- Texte: „Als Nächstes“ leer vor dem Tausch: „Bis zum Tausch am … steht nichts mehr an.“; letzter Tag einer Frist mit Spielraum: „heute letzter Tag“; Joker-Hinweis ohne doppelten Punkt.
