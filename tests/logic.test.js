@@ -5,7 +5,7 @@ import {
   toDay, fromDay, isoWeek, kindOf, evaluate, completionId, relevantKeys,
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, inSeason, windowsBetween, awayDuring,
   timesPerMonth, monthlyMinutes, loadByPerson, autoSplit, spreadPositions, slackOf, holidays, dueBetween, weekStreaks,
-  personalWeek, isPressing, goalOf, goalStats, goalResult,
+  personalWeek, isPressing, goalOf, goalStats, goalResult, slackAt,
   jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX, PACKAGES, isPackage, swapsByRound, upsertHome,
   nextRounds, migrateColors, suggestColor, PALETTE, revokeGoalHits, revokeStats, householdFull, colorName, colorLabel, urgency, pauseDuring, currentPause, setPause, endPause, pausedItem, changeAway, moveRange,
 } from '../js/logic.js';
@@ -316,7 +316,7 @@ test('Aufteilung nach Zeit: beide fast gleich viel, Wöchentliches so gleich wie
   assert.ok(Math.abs(week(load.p1) - week(load.p2)) < 0.1, `${week(load.p1)} vs ${week(load.p2)}`);
   const weekly = autoSplit(OUR_TASKS).filter((t) => t.n === 1 && t.unit === 'week');
   const sum = (a) => weekly.filter((t) => t.assign === a).reduce((s, t) => s + t.min, 0);
-  assert.equal(Math.abs(sum('A') - sum('B')), 30); // Wäsche 90 gegen 60
+  assert.equal(Math.abs(sum('A') - sum('B')), 15); // Bügeln 45 + 15 gegen 30 + 15
 });
 
 test('Vorlage: vollständig, Kern und unser Plan passen', () => {
@@ -329,30 +329,31 @@ test('Vorlage: vollständig, Kern und unser Plan passen', () => {
   assert.equal(new Set(TEMPLATE.map((t) => t.title)).size, TEMPLATE.length);
   const ctx2 = ctx();
   const hoursPerWeek = (list) => Object.values(loadByPerson(list, ctx2)).reduce((a, b) => a + b, 0) / 4.3 / 60;
-  assert.ok(Math.abs(hoursPerWeek(OUR_TASKS) - 4.4) < 0.1, `${hoursPerWeek(OUR_TASKS)}`);
+  assert.ok(Math.abs(hoursPerWeek(OUR_TASKS) - 3.65) < 0.1, `${hoursPerWeek(OUR_TASKS)}`);
   const titles = OUR_TASKS.map((t) => t.title);
   assert.ok(!titles.some((x) => x.startsWith('Garten') || x.startsWith('Haustier') || x.includes('Balkon')));
-  assert.ok(titles.includes('Loggia kehren') && titles.includes('Wäsche inkl. Bügeln') && titles.includes('Kind: Kindersitz waschen'));
+  assert.ok(titles.includes('Loggia kehren') && titles.includes('Bügeln') && !titles.includes('Wäsche') && titles.includes('Kind: Kindersitz waschen'));
   const bett = OUR_TASKS.find((t) => t.title === 'Bett neu beziehen');
   assert.deepEqual([bett.n, bett.unit], [1, 'month']);
-  assert.ok(!OUR_RULES.includes('Haustier: Näpfe reinigen') && OUR_RULES.includes('Pflanzen gießen bei Hitze'));
-  assert.equal(TEMPLATE_RULES.length, 10);
+  assert.ok(!OUR_RULES.includes('Haustier: Näpfe reinigen') && OUR_RULES.includes('Pflanzen gießen bei Hitze') && OUR_RULES.includes('Wäsche waschen'));
+  assert.equal(TEMPLATE_RULES.length, 11);
 });
 
 test('Vorschlag: ohne Antworten nur der Kern, Antworten wählen Passendes vor', () => {
   const on = (answers) => suggestTasks(answers).filter((t) => t.on);
   assert.ok(on([]).every((t) => !t.when));
-  assert.equal(on([]).length, 35);
+  assert.equal(on([]).length, 34);
   assert.equal(suggestTasks([]).length, TEMPLATE.length);
-  assert.equal(suggestRules([]).length, 7);
+  assert.equal(suggestRules([]).length, 8);
+  assert.ok(suggestRules([]).includes('Wäsche waschen')); // Waschen ist immer eine Abmachung
   assert.ok(on(['kind']).some((t) => t.title === 'Kind: Kindersitz waschen'));
   assert.ok(suggestRules(['kind']).includes('Kind: Hochstuhl und Wickeltisch abwischen'));
   const pets = on(['haustier']).filter((t) => t.area === 'tier').map((t) => t.title);
   assert.deepEqual(pets, ['Haustier: Schlafplatz waschen']); // Katzenklo, Käfig nur angeboten
-  const washing = on(['buegeln']).find((t) => t.title.startsWith('Wäsche'));
-  assert.deepEqual([washing.title, washing.min], ['Wäsche inkl. Bügeln', 90]);
-  assert.equal(on(['buegeln']).length, 35); // Bügeln ist keine eigene Aufgabe
-  assert.equal(TEMPLATE.find((t) => t.title === 'Wäsche').min, 60); // Vorlage bleibt unverändert
+  assert.ok(!on([]).some((t) => t.title === 'Bügeln')); // ohne Bügeln keine Wäsche-Aufgabe
+  const ironing = on(['buegeln']).find((t) => t.title === 'Bügeln');
+  assert.deepEqual([ironing.n, ironing.unit, ironing.min], [1, 'week', 45]);
+  assert.equal(on(['buegeln']).length, 35);
   const all = QUESTIONS.map((q) => q[0]);
   assert.equal(on(all).length, TEMPLATE.filter((t) => !t.soft).length);
 });
@@ -895,14 +896,14 @@ test('Start in der Zukunft: vorher nichts fällig oder rot, erster Tausch frühe
 // ---------- Vorher abhaken ----------
 const rounds = (tasks, c, today, done = new Map(), me = 'p1') => nextRounds(tasks, c, me, today, done);
 
-test('Vorher abhaken: nächste eigene Runde in 7 Tagen, ohne Tägliches, Bei Bedarf, Gemeinsames und Fremdes', () => {
+test('Vorher abhaken: nächste eigene und gemeinsame Runde in 7 Tagen, ohne Tägliches, Bei Bedarf und Fremdes', () => {
   const list = [
     task({ id: 'w', assign: 'A' }), task({ id: 'b', assign: 'B' }), task({ id: 's', assign: 'shared' }),
     task({ id: 'd', n: 1, unit: 'day', assign: 'A' }), task({ id: 'n', n: 0, unit: 'need', assign: 'A' }),
   ];
   const r = rounds(list, ctx(), '2026-11-01');
-  assert.deepEqual(r.map((x) => [x.task.id, x.due, x.status]), [['w', '2026-11-07', 'upcoming']]);
-  assert.deepEqual(rounds(list, ctx(), '2026-11-07').map((x) => x.due), ['2026-11-14']); // heute zählt nicht als „nächste“
+  assert.deepEqual(r.map((x) => [x.task.id, x.due, x.status, x.owner]), [['w', '2026-11-07', 'upcoming', 'p1'], ['s', '2026-11-07', 'upcoming', null]]);
+  assert.deepEqual(rounds(list, ctx(), '2026-11-07').map((x) => x.due), ['2026-11-14', '2026-11-14']); // heute zählt nicht als „nächste“
   assert.deepEqual(rounds([task({ id: 'p', assign: 'each' })], ctx(), '2026-11-01').map((x) => x.slot), ['p1']);
 });
 
@@ -1176,4 +1177,74 @@ test('Zeitraum ändern: das geänderte Datum gewinnt, nichts wird vertauscht', (
   assert.deepEqual(step2.awayPast.p1, [r]);
   assert.deepEqual(step2.away.p1, { from: '2026-11-10', to: '2026-11-15' });
   assert.equal(awayDuring(step2, 'p1', toDay('2026-10-28'), toDay('2026-10-28')), false);
+});
+
+// ---------- Fristen ab strictFrom (v52) ----------
+
+test('Fristen: Wöchentliches ist am Putztag fällig, ab dem Folgetag vergessen', () => {
+  const c = ctx({ strictFrom: '2026-11-01' });
+  const t = task({ created: '2026-11-01' });
+  assert.deepEqual(st(t, c, '2026-11-06'), ['upcoming', '2026-11-07', '2026-11-07']);
+  assert.deepEqual(st(t, c, '2026-11-07'), ['due', '2026-11-07', '2026-11-07']);
+  const o = one(t, c, '2026-11-08');
+  assert.deepEqual([o.status, o.key], ['overdue', 'weekly:2026-11-02']);
+  assert.equal(isPressing(o, '2026-11-08'), true);
+  assert.equal(one(t, c, '2026-11-08', [['weekly:2026-11-02', null]]).status, 'done'); // Nachholen geht
+  // Ab dem nächsten Termin zählt der Haken für den laufenden, wie bisher
+  assert.deepEqual([one(t, c, '2026-11-14').status, one(t, c, '2026-11-14').key], ['overdue', 'weekly:2026-11-09']);
+});
+
+test('Fristen: alle 2 Wochen ebenso ohne Spielraum', () => {
+  const c = ctx({ setup: '2026-11-02', strictFrom: '2026-11-02' });
+  const t = task({ n: 2, created: '2026-11-02' });
+  assert.deepEqual(st(t, c, '2026-11-07'), ['due', '2026-11-07', '2026-11-07']);
+  assert.equal(one(t, c, '2026-11-08').status, 'overdue');
+});
+
+test('Fristen: Monatliches und Selteneres 7 Tage, ohne Stichtag wie bisher', () => {
+  const m = task({ n: 1, unit: 'month' }), q = task({ n: 3, unit: 'month' }), y = task({ n: 12, unit: 'month' });
+  const c = ctx({ strictFrom: '2026-10-28' });
+  const due = toDay('2026-11-07');
+  assert.deepEqual([m, q, y].map((t) => slackAt(t, due, c)), [7, 7, 7]);
+  assert.deepEqual([m, q, y].map((t) => slackAt(t, due, ctx())), [5, 14, 14]);
+  assert.deepEqual(st(m, c, '2026-11-14'), ['due', '2026-11-07', '2026-11-14']);
+  assert.equal(one(m, c, '2026-11-15').status, 'overdue');
+  // Täglich und eigene Intervalle bleiben
+  assert.equal(slackAt(task({ n: 1, unit: 'day' }), due, c), 0);
+  assert.equal(slackAt(task({ n: 10, unit: 'day' }), due, c), slackOf(task({ n: 10, unit: 'day' })));
+});
+
+test('Fristen: Termine vor dem Stichtag behalten die alte Frist', () => {
+  const c = ctx({ strictFrom: '2026-11-10' });
+  const t = task({ created: '2026-11-01' });
+  assert.deepEqual(st(t, c, '2026-11-12'), ['due', '2026-11-07', '2026-11-13']); // alter Termin, alte Frist
+  assert.deepEqual(st(t, c, '2026-11-14', [['weekly:2026-11-02', null]]), ['due', '2026-11-14', '2026-11-14']);
+  const m = task({ n: 1, unit: 'month' });
+  assert.deepEqual(st(m, c, '2026-11-12'), ['due', '2026-11-07', '2026-11-12']); // monatlich: alte 5 Tage
+  assert.equal(windowsBetween(t, c, '2026-11-01', '2026-11-30').map((w) => `${w.start}–${w.end}`).join(' '),
+    '2026-11-07–2026-11-13 2026-11-14–2026-11-14 2026-11-21–2026-11-21 2026-11-28–2026-11-28');
+});
+
+test('Fristen: Joker gibt genau eine Woche ab dem Putztag', () => {
+  const t = task({ assign: 'A', created: '2026-11-01' });
+  const id = completionId(t.id, 'weekly:2026-11-02', null);
+  const c = ctx({ strictFrom: '2026-11-01', joker_p1: { count: 0, deferred: { [id]: '2026-11-08' } } });
+  const i = one(t, c, '2026-11-10');
+  assert.deepEqual([i.status, i.due, i.end, i.deferred], ['due', '2026-11-07', '2026-11-14', true]);
+  assert.equal(canJoker(one(t, ctx({ strictFrom: '2026-11-01' }), '2026-11-07'), '2026-11-07'), true);
+});
+
+test('Fristen: Abwesenheit muss den Putztag treffen', () => {
+  const t = task({ assign: 'A', created: '2026-11-01' });
+  const away = (from, to) => ctx({ strictFrom: '2026-11-01', away: { p1: { from, to } } });
+  assert.equal(one(t, away('2026-11-07', '2026-11-07'), '2026-11-08').status, 'idle'); // am Putztag weg: entschuldigt
+  assert.equal(one(t, away('2026-11-09', '2026-11-12'), '2026-11-08').status, 'overdue'); // danach weg: zählt nicht
+});
+
+test('Vorher abhaken: Gemeinsames pausiert nur, wenn alle weg sind', () => {
+  const s = task({ id: 's', assign: 'shared' });
+  const one_ = ctx({ away: { p1: { from: '2026-11-06', to: '2026-11-08' } } });
+  assert.deepEqual(rounds([s], one_, '2026-11-01').map((x) => x.due), ['2026-11-07']);
+  const both = ctx({ away: { p1: { from: '2026-11-06', to: '2026-11-08' }, p2: { from: '2026-11-06', to: '2026-11-08' } } });
+  assert.deepEqual(rounds([s], both, '2026-11-01'), []);
 });
