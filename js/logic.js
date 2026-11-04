@@ -647,10 +647,12 @@ export function evaluate(task, ctx, todayStr, completions) {
 
 // Wöchentlich und alle 2 Wochen: wie evaluate, aber nach Terminen statt Kalenderperioden.
 // Vorziehen geht ab Beginn der Kalenderperiode des Termins, sobald der laufende Termin erledigt ist.
+// Gehört die laufende Runde nach dem Tausch jemand anderem, bleibt ein verpasster voriger Termin eine eigene Zeile
+// bei der Person, die ihn verpasst hat, und ihr Haken zählt für ihn (sonst erledigte er die Runde der anderen).
 function evaluateRolling(task, ctx, todayStr, completions) {
   const today = toDay(todayStr);
   const offseason = !inSeason(task.season, ymd(today)[1]);
-  return slotsOf(task, ctx).map((slot) => {
+  return slotsOf(task, ctx).flatMap((slot) => {
     const { i, terms } = rollingAround(task, ctx, slot, today);
     const list = terms.filter((x) => x.counts);
     const past = list.filter((x) => x.due <= today);
@@ -679,21 +681,29 @@ function evaluateRolling(task, ctx, todayStr, completions) {
     };
     if (offseason) {
       item.status = 'offseason';
-      return idle();
+      return [idle()];
     }
     const open = (x) => x && !paused(ctx, x.owner, x.due, x.end, task) && !get(x);
-    if (cur && !get(cur)) {
-      // voriger Termin verpasst: einmal überfällig, bei der Person, die ihn verpasst hat; Abhaken zählt für den laufenden.
-      // Mit Joker läuft seine Frist noch: bleibt bei dieser Person und deckt die neue Runde mit ab.
-      if (open(prv)) return set(today <= prv.end ? 'due' : 'overdue', prv, cur.key);
-      if (today <= cur.end) return set('due', cur, cur.key);
-      if (paused(ctx, cur.owner, cur.due, cur.end, task)) return idle();
-      return set('overdue', cur, cur.key);
-    }
-    // Heute Erledigtes bleibt heute „erledigt“ (zählt in der Statuskarte), erst danach lässt sich vorziehen
-    const nxt = cur && get(cur)?.day === todayStr ? null : after(today);
-    if (nxt && nxt.p.start <= today) return get(nxt) ? done(nxt) : set('upcoming', nxt, nxt.key);
-    return cur ? done(cur) : idle();
+    const split = !!cur && open(prv) && prv.owner !== cur.owner;
+    const late = split ? [{
+      task, slot, owner: prv.owner, status: today <= prv.end ? 'due' : 'overdue', key: prv.key, due: fromDay(prv.due), end: fromDay(prv.end),
+      completion: null, next: null, termKey: prv.key, deferred: !!prv.def,
+    }] : [];
+    const main = () => {
+      if (cur && !get(cur)) {
+        // voriger Termin verpasst: einmal überfällig, bei der Person, die ihn verpasst hat; Abhaken zählt für den laufenden.
+        // Mit Joker läuft seine Frist noch: bleibt bei dieser Person und deckt die neue Runde mit ab.
+        if (!split && open(prv)) return set(today <= prv.end ? 'due' : 'overdue', prv, cur.key);
+        if (today <= cur.end) return set('due', cur, cur.key);
+        if (paused(ctx, cur.owner, cur.due, cur.end, task)) return idle();
+        return set('overdue', cur, cur.key);
+      }
+      // Heute Erledigtes bleibt heute „erledigt“ (zählt in der Statuskarte), erst danach lässt sich vorziehen
+      const nxt = cur && get(cur)?.day === todayStr ? null : after(today);
+      if (nxt && nxt.p.start <= today) return get(nxt) ? done(nxt) : set('upcoming', nxt, nxt.key);
+      return cur ? done(cur) : idle();
+    };
+    return [...late, main()];
   });
 }
 

@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.53';
+const APP_VERSION = '2.0.54';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -446,6 +446,7 @@ function whenText(it) {
   if (it.status === 'upcoming') return termText(it);
   if (it.status === 'idle' && it.next) return `ab ${dayLabel(it.next)}`;
   if (it.status === 'due' && it.end > S.today) return `noch bis ${dayLabel(it.end)}`;
+  if (it.status === 'due' && it.end === S.today && it.due < S.today) return 'heute letzter Tag';
   return '';
 }
 
@@ -469,10 +470,10 @@ function nowRow(it, sub = '', ahead = false, plain = false) {
   // Joker erst anbieten, wenn es knapp wird: sonst stünde der Knopf bei jeder Aufgabe. Wöchentliches erst, wenn es rot ist
   const joker = it.owner === S.me && canJoker(it, S.today) && jokerOf(S.hh, S.me).count > 0
     && (isRolling(t) ? it.status === 'overdue' : toDay(it.end) - toDay(S.today) <= 2)
-    ? `<button class="jokerbtn" data-action="joker" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}">Joker: 1 Woche später</button>` : '';
+    ? `<button class="jokerbtn" data-action="joker" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}" data-term="${esc(it.termKey ?? '')}">Joker: 1 Woche später</button>` : '';
   return swipeRow({
     done, locked, off, by,
-    check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}" ${ahead ? `data-key="${esc(it.key)}" ${it.owner === null ? 'data-shared' : ''}` : ''}
+    check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}" data-term="${esc(it.termKey ?? '')}" ${ahead ? `data-key="${esc(it.key)}" ${it.owner === null ? 'data-shared' : ''}` : ''}
       ${done ? 'checked' : ''} ${off || locked ? 'disabled' : ''} aria-label="${esc(t.title)} erledigt">`,
     body: `<div class="body"><div class="head"><span class="title">${esc(t.title)}</span>${plain ? '' : `<span class="kind">${iv}</span>`}</div>
       ${extra ? `<div class="meta">${extra}</div>` : ''}${ahead || plain ? '' : stepsBlock(it)}${joker}</div>`,
@@ -640,7 +641,7 @@ function viewToday() {
   const aheadOpen = ahead.filter((i) => i.status !== 'done').length;
   const aheadBlock = !calm && !ahead.length ? '' : ahead.length
     ? fold('ahead', head('Als Nächstes', aheadOpen), `<p class="small">Schon früher fertig? Der Haken gilt für die nächste Runde.</p><div class="list">${ahead.map((i) => nowRow(i, i.status === 'done' ? `vorab erledigt von ${byWho(i.completion.by)} · für ${dayLabel(i.due)}` : termText(i), true)).join('')}</div>`, calm)
-    : `<details class="fold" data-fold="ahead-empty"><summary>${head('Als Nächstes', 0)}</summary><p class="small">In den nächsten 7 Tagen steht nichts an.</p></details>`;
+    : `<details class="fold" data-fold="ahead-empty"><summary>${head('Als Nächstes', 0)}</summary><p class="small">${swap && toDay(swap) - toDay(S.today) <= 7 ? `Bis zum Tausch am ${fmtDate(swap)} steht nichts mehr an.` : 'In den nächsten 7 Tagen steht nichts an.'}</p></details>`;
 
   return `${card}
     ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} extra</span>` : ''}`, `<div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
@@ -1595,13 +1596,17 @@ function snack(text, undo) {
   snackTimer = setTimeout(() => { el.hidden = true; }, 5000);
 }
 
+// Zeile einer Aufgabe: nach Slot und, wenn angegeben, Termin (nach dem Tausch kann es zwei Zeilen geben)
+const findItem = (task, slot, term) => evaluate(task, S.hh, S.today, S.comps)
+  .find((i) => (i.slot ?? null) === slot && (!term || i.termKey === term));
+
 function toggle(input) {
   const task = S.tasks.find((t) => t.id === input.dataset.task);
   if (!task) return;
   const slot = input.dataset.slot || null;
   // Als Nächstes: der Schlüssel steht in der Zeile, die Runde gehört der Person selbst
   const ahead = input.dataset.key;
-  const it = ahead ? { key: ahead, owner: 'shared' in input.dataset ? null : S.me } : evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
+  const it = ahead ? { key: ahead, owner: 'shared' in input.dataset ? null : S.me } : findItem(task, slot, input.dataset.term);
   if (!it?.key) return;
   const id = completionId(task.id, it.key, slot);
   if (input.checked) {
@@ -1665,12 +1670,12 @@ function countRule(delta, id) {
 function playJoker(el) {
   const task = S.tasks.find((t) => t.id === el.dataset.task);
   const slot = el.dataset.slot || null;
-  const it = task && evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
+  const it = task && findItem(task, slot, el.dataset.term);
   const j = jokerOf(S.hh, S.me);
   if (!it || it.owner !== S.me || !j.count || !canJoker(it, S.today)) return;
   saveJoker(useJoker(j, completionId(task.id, it.termKey, slot), S.today));
   haptic();
-  snack(`Verschoben bis ${dayLabel(fromDay(toDay(it.end) + 7))}.`, () => { saveJoker(j); render(); });
+  snack(`Verschoben bis ${dayLabel(fromDay(toDay(it.end) + 7)).replace(/\.?$/, '.')}`, () => { saveJoker(j); render(); });
   render();
 }
 
@@ -1780,14 +1785,14 @@ function stepsBlock(it) {
   if (!steps.length || it.status === 'done' || !it.key) return '';
   const key = `st-${it.task.id}-${it.slot ?? ''}`;
   return `<details class="steps" data-fold="${key}" ${S.open[key] ? 'open' : ''}><summary>Teilschritte ${stepsDone(it)}/${steps.length}</summary>
-    ${steps.map((st, i) => `<label class="step"><input type="checkbox" data-action="toggle-step" data-task="${esc(it.task.id)}" data-slot="${esc(it.slot ?? '')}"
+    ${steps.map((st, i) => `<label class="step"><input type="checkbox" data-action="toggle-step" data-task="${esc(it.task.id)}" data-slot="${esc(it.slot ?? '')}" data-term="${esc(it.termKey ?? '')}"
       data-step="${i}" ${S.comps.has(stepId(it, i)) ? 'checked' : ''}><span class="box"></span><span>${esc(st)}</span></label>`).join('')}</details>`;
 }
 
 function toggleStep(input) {
   const task = S.tasks.find((t) => t.id === input.dataset.task);
   const slot = input.dataset.slot || null;
-  const it = task && evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
+  const it = task && findItem(task, slot, input.dataset.term);
   if (!it?.key) return;
   const i = +input.dataset.step;
   const id = stepId(it, i);
