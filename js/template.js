@@ -34,7 +34,7 @@ const FRUEHLING_HERBST = { season: { from: 3, to: 5, from2: 9, to2: 11 } };
 
 export const TEMPLATE = [
   // Wöchentlich
-  t('Wäsche', W, 'waesche', 60, { note: 'Waschen bis wegräumen' }),
+  t('Bügeln', W, 'waesche', 45, { when: 'buegeln', note: 'Inkl. wegräumen' }),
   t('Staubsaugen', W, 'boden', 30),
   t('Bad kurz putzen', W, 'bad', 15, { note: 'WC, Waschbecken, Spiegel, Handtücher wechseln' }),
   t('Pflanzen gießen', W, 'pflanzen', 15, { when: 'pflanzen' }),
@@ -111,6 +111,7 @@ export const GOAL_REWARDS = ['Pizza-Abend', 'Essen gehen', 'Kinoabend', 'Ausflug
 
 // Abmachungen: Selbstverständliches, täglich für beide abhakbar (nie „offen“)
 export const TEMPLATE_RULES = [
+  'Wäsche waschen',
   'Geschirr und Küche',
   'Kochen',
   'Einkaufen',
@@ -130,25 +131,22 @@ export const RULE_WHEN = {
   'Haustier: Näpfe reinigen': 'haustier',
 };
 
-// Fragen „Was gibt es bei euch?“; Bügeln verlängert nur die Wäsche, weil es keine Folgeaufgaben gibt
+// Fragen „Was gibt es bei euch?“; Wäsche waschen ist eine Abmachung (ohne Trockner nicht an einem Tag), Bügeln eine eigene wöchentliche Aufgabe
 export const QUESTIONS = [
   ['kind', 'Kind'], ['haustier', 'Haustier'], ['pflanzen', 'Pflanzen'], ['balkon', 'Balkon'], ['garten', 'Garten'],
   ['auto', 'Auto'], ['geschirrspueler', 'Geschirrspüler'], ['duschvorhang', 'Duschvorhang'], ['buegeln', 'Bügeln'],
 ];
-const IRONING = { title: 'Wäsche inkl. Bügeln', min: 90 };
 
 // Vorschlag: alle Aufgaben, on = vorausgewählt. Ohne Antworten nur der Kern.
 export const suggestTasks = (answers) => TEMPLATE.map((x) => ({
   ...x,
-  ...(x.title === 'Wäsche' && answers.includes('buegeln') ? IRONING : {}),
   on: !x.when || (answers.includes(x.when) && !x.soft),
 }));
 export const suggestRules = (answers) => TEMPLATE_RULES.filter((r) => !RULE_WHEN[r] || answers.includes(RULE_WHEN[r]));
 
 // Daniel und Sabrina: Vorlage mit unseren Abweichungen (nur solange wir testen, vor Verkauf entfernen)
-const OUR_HOME = ['kind', 'auto', 'geschirrspueler', 'duschvorhang', 'balkon', 'pflanzen'];
+const OUR_HOME = ['kind', 'auto', 'geschirrspueler', 'duschvorhang', 'balkon', 'pflanzen', 'buegeln'];
 const OUR_CHANGES = {
-  'Wäsche': IRONING,
   'Bett neu beziehen': M,
 };
 export const OUR_TASKS = TEMPLATE.filter((x) => !x.when || OUR_HOME.includes(x.when))
@@ -157,7 +155,7 @@ export const OUR_RULES = TEMPLATE_RULES.filter((r) => !RULE_WHEN[r] || OUR_HOME.
 
 // Vorschläge zum Auswählen: die häufigsten immer sichtbar, der Rest nach Bereichen zum Aufklappen.
 // Kennung einer Abmachung ist ihr Text, Vorschläge also nicht umformulieren (sonst in RULE_RENAMED eintragen).
-export const RULE_COMMON = ['Geschirr und Küche', 'Kochen', 'Einkaufen', 'Kühlschrank prüfen', 'Kurz aufräumen', 'Müll rausbringen', 'Altglas und Altpapier', 'Betten machen'];
+export const RULE_COMMON = ['Wäsche waschen', 'Geschirr und Küche', 'Kochen', 'Einkaufen', 'Kühlschrank prüfen', 'Kurz aufräumen', 'Müll rausbringen', 'Altglas und Altpapier', 'Betten machen'];
 export const RULE_GROUPS = [
   ['kueche', 'Küche', ['Geschirrspüler ein- und ausräumen', 'Frühstück herrichten', 'Tisch decken']],
   ['haushalt', 'Haushalt', ['Wäsche aufhängen', 'Post holen', 'Saugroboter leeren']],

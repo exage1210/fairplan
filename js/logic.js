@@ -135,6 +135,12 @@ export function slackOf(task) {
   return 14;
 }
 
+// Fristen ab ctx.strictFrom (v52): Wöchentliches und „alle 2 Wochen“ am Putztag selbst, Monatliches und Selteneres 7 Tage danach.
+// Termine davor behalten den alten Spielraum, damit nichts rückwirkend rot wird. Täglich und eigene Intervalle wie bisher.
+const STRICT_SLACK = { weekly: 0, biweekly: 0, monthly: 7, quarterly: 7, halfyear: 7, yearly: 7 };
+const isStrict = (task, due, ctx) => !!ctx.strictFrom && due >= toDay(ctx.strictFrom) && kindOf(task) in STRICT_SLACK;
+export const slackAt = (task, due, ctx) => (isStrict(task, due, ctx) ? STRICT_SLACK[kindOf(task)] : slackOf(task));
+
 // Termin einer Periode: der Putztag an Position task.pos. Wöchentlich wählt pos den Putztag in der Woche,
 // sonst die Woche in der Periode (jeweils erster Putztag dieser Woche). Nur Tage in der Saison.
 // Tägliches und Tagesintervalle: Periodenbeginn. null = in dieser Periode kein passender Tag.
@@ -479,7 +485,8 @@ function rollingTerms(task, ctx, slot, fromI, toI) {
   return terms.map((x, n) => {
     const next = terms[n + 1];
     const def = isDeferred(ctx, x.owner, completionId(task.id, x.key, slot));
-    return { ...x, def, end: (next && next.due - x.due <= 2 * len ? next.due - 1 : x.due + len - 1) + (def ? JOKER_DAYS : 0) };
+    const end = isStrict(task, x.due, ctx) ? x.due : next && next.due - x.due <= 2 * len ? next.due - 1 : x.due + len - 1;
+    return { ...x, def, end: end + (def ? JOKER_DAYS : 0) };
   }).filter((x) => x.k <= toI);
 }
 const rollingAround = (task, ctx, slot, today) => {
@@ -570,7 +577,6 @@ export function evaluate(task, ctx, todayStr, completions) {
   const today = toDay(todayStr);
   const start = startOf(task, ctx);
   const daily = kindOf(task) === 'daily';
-  const slack = slackOf(task);
   const { scheme, i, cur, prev } = periodsAround(task, ctx, today);
   const get = (key, slot) => completions.get(completionId(task.id, key, slot));
   const offseason = !inSeason(task.season, ymd(today)[1]);
@@ -580,7 +586,7 @@ export function evaluate(task, ctx, todayStr, completions) {
       const owner = ownerOf(task, p, p.start, slot, ctx);
       const due = dueDay(task, p, ctx, owner);
       const def = isDeferred(ctx, owner, completionId(task.id, p.key, slot));
-      return { p, owner, due, def, end: due === null ? null : due + slack + (def ? JOKER_DAYS : 0), counts: due !== null && due >= start };
+      return { p, owner, due, def, end: due === null ? null : due + slackAt(task, due, ctx) + (def ? JOKER_DAYS : 0), counts: due !== null && due >= start };
     };
     const nextDue = () => {
       for (let k = i + 1; k < i + 400; k++) {
@@ -696,7 +702,6 @@ export function windowsBetween(task, ctx, fromStr, toStr) {
       .map((x) => ({ task, slot, owner: x.owner, key: x.key, start: fromDay(x.due), end: fromDay(x.end), deferred: x.def })));
   }
   const start = startOf(task, ctx);
-  const slack = slackOf(task);
   const scheme = periodScheme(task, toDay(ctx.setup));
   const out = [];
   for (let k = scheme.indexAt(from) - 1; k <= scheme.indexAt(to) + 1; k++) {
@@ -705,7 +710,7 @@ export function windowsBetween(task, ctx, fromStr, toStr) {
       const owner = ownerOf(task, p, p.start, slot, ctx);
       const due = dueDay(task, p, ctx, owner);
       const def = isDeferred(ctx, owner, completionId(task.id, p.key, slot));
-      const end = due === null ? null : due + slack + (def ? JOKER_DAYS : 0);
+      const end = due === null ? null : due + slackAt(task, due, ctx) + (def ? JOKER_DAYS : 0);
       if (due === null || due < start || due > to || end < from) continue;
       out.push({ task, slot, owner, key: p.key, start: fromDay(due), end: fromDay(end), deferred: def });
     }
@@ -713,9 +718,9 @@ export function windowsBetween(task, ctx, fromStr, toStr) {
   return out;
 }
 
-// Vorher abhaken: die nächste Runde eigener Aufgaben in den kommenden Tagen, je Aufgabe und Slot höchstens eine.
-// Nur eigene, ohne Tägliches und Bei Bedarf, nie ab dem nächsten Tauschtag; Verschobenes und Termine in der eigenen
-// Abwesenheit nur, wenn sie schon erledigt sind. Der Haken zählt über den Schlüssel für diesen Termin.
+// Vorher abhaken: die nächste Runde eigener und gemeinsamer Aufgaben in den kommenden Tagen, je Aufgabe und Slot höchstens eine.
+// Ohne Tägliches und Bei Bedarf, nie ab dem nächsten Tauschtag; Verschobenes und Termine in der Abwesenheit
+// (bei Gemeinsamem: aller) nur, wenn sie schon erledigt sind. Der Haken zählt über den Schlüssel für diesen Termin.
 // Liefert nach Datum [{ task, slot, owner, key, status, due, end, completion, next, termKey, deferred }].
 export function nextRounds(tasks, ctx, me, todayStr, doneById, days = 7) {
   const today = toDay(todayStr);
@@ -725,16 +730,16 @@ export function nextRounds(tasks, ctx, me, todayStr, doneById, days = 7) {
     if (kindOf(task) === 'daily') continue;
     const seen = new Set();
     const list = windowsBetween(task, ctx, fromDay(today + 1), fromDay(today + days))
-      .filter((w) => w.owner === me && w.start > todayStr && (!swap || w.start < swap))
+      .filter((w) => (w.owner === me || w.owner === null) && w.start > todayStr && (!swap || w.start < swap))
       .sort((a, b) => a.start.localeCompare(b.start));
     for (const w of list) {
       if (seen.has(w.slot)) continue;
       seen.add(w.slot);
       const c = doneById.get(completionId(task.id, w.key, w.slot)) || null;
-      const off = w.deferred || paused(ctx, me, toDay(w.start), toDay(isRolling(task) ? w.start : w.end));
+      const off = w.deferred || paused(ctx, w.owner, toDay(w.start), toDay(isRolling(task) ? w.start : w.end));
       if (off && !c) continue;
       out.push({
-        task, slot: w.slot, owner: me, key: w.key, status: c ? 'done' : 'upcoming', due: w.start, end: w.end,
+        task, slot: w.slot, owner: w.owner, key: w.key, status: c ? 'done' : 'upcoming', due: w.start, end: w.end,
         completion: c, next: null, termKey: w.key, deferred: false,
       });
     }

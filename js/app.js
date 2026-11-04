@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.50';
+const APP_VERSION = '2.0.52';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -330,6 +330,7 @@ function render() {
   if (!person(S.me)) return renderWhoAmI();
   rememberHome();
   markSeen();
+  markStrict();
 
   syncAccent();
   const recent = fromDay(toDay(S.today) - 62);
@@ -435,13 +436,16 @@ function itemRow(it, { lead = 'interval' } = {}) {
 // Vergessenes: neutral, nur der Hinweis in gedämpftem Rot – und das nur bei eigenen/gemeinsamen Aufgaben
 const lateText = (it) => `<span class="${it.owner === S.me || it.owner === null ? 'late' : ''}">seit ${dayLabel(it.end)} offen</span>`;
 
+// Kommender Termin: „Di 10.11.“, mit Spielraum „Sa 7.11., bis Sa 14.11.“
+const termText = (it) => (it.due === it.end ? dayLabel(it.due) : `${dayLabel(it.due)}, bis ${dayLabel(it.end)}`);
+
 // Termin-Zusatz für „Aktuell“: „seit … offen“, „bis Sa“, „ab Mo 2.11.“ – bei „Heute“ nichts
 function whenText(it) {
   if (it.status === 'overdue') return lateText(it);
   if (it.deferred && it.status === 'due') return `verschoben, bis ${dayLabel(it.end)}`;
-  if (it.status === 'upcoming') return `${dayLabel(it.due)}, bis ${dayLabel(it.end)}`;
+  if (it.status === 'upcoming') return termText(it);
   if (it.status === 'idle' && it.next) return `ab ${dayLabel(it.next)}`;
-  if (it.status === 'due' && it.end > S.today) return `bis ${dayLabel(it.end)}`;
+  if (it.status === 'due' && it.end > S.today) return `noch bis ${dayLabel(it.end)}`;
   return '';
 }
 
@@ -467,7 +471,7 @@ function nowRow(it, sub = '', ahead = false, plain = false) {
     ? `<button class="jokerbtn" data-action="joker" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}">Joker: 1 Woche später</button>` : '';
   return swipeRow({
     done, locked, off, by,
-    check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}" ${ahead ? `data-key="${esc(it.key)}"` : ''}
+    check: `<input type="checkbox" data-action="toggle" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}" ${ahead ? `data-key="${esc(it.key)}" ${it.owner === null ? 'data-shared' : ''}` : ''}
       ${done ? 'checked' : ''} ${off || locked ? 'disabled' : ''} aria-label="${esc(t.title)} erledigt">`,
     body: `<div class="body"><div class="head"><span class="title">${esc(t.title)}</span>${plain ? '' : `<span class="kind">${iv}</span>`}</div>
       ${extra ? `<div class="meta">${extra}</div>` : ''}${ahead || plain ? '' : stepsBlock(it)}${joker}</div>`,
@@ -569,13 +573,11 @@ const byUrgency = (a, b) => urgency(a, S.today) - urgency(b, S.today) || byOwner
 
 function viewToday() {
   const items = allItems();
-  const sun = weekEnd();
   const [myFrom, myTo] = personalWeek(person(S.me)?.days, S.today);
   const open = items.filter((i) => (i.status === 'due' || i.status === 'overdue' || i.status === 'upcoming') && !pausedItem(i, S.hh, S.today));
-  // Aufgaben: Vergessenes, jetzt Dranes und was diese Woche noch kommt (lässt sich schon vorher abhaken)
-  const tasks = open.filter((i) => mineItem(i) && !myPaused(i) && (i.status !== 'upcoming' || i.due <= sun))
-    .sort(byUrgency);
-  const now = tasks.filter((i) => i.status !== 'upcoming');
+  // Heute: Vergessenes und was jetzt fällig ist; was erst kommt, steht unter „Als Nächstes“
+  const tasks = open.filter((i) => mineItem(i) && !myPaused(i) && i.status !== 'upcoming').sort(byUrgency);
+  const now = tasks;
   const need = items.filter((i) => mineItem(i) && i.status === 'need').sort(byOwnerRhythm);
 
   const rules = (S.hh.rules || []).filter((r) => r && inSeason(RULE_SEASONS[r], +S.today.slice(5, 7)));
@@ -599,7 +601,9 @@ function viewToday() {
   // Alles erledigt: nichts Fälliges offen, aber es gibt eigene Aufgaben und der Plan läuft
   const homePause = pauseDuring(S.hh, toDay(S.today), toDay(S.today)) ? currentPause(S.hh, S.today) : null;
   const calm = !now.length && !meAway && !homePause && S.today >= S.hh.setup && items.some((i) => mineItem(i) && kindOf(i.task) !== 'asneeded');
-  const ahead = calm ? nextRounds(S.tasks, S.hh, S.me, S.today, doneMap()) : [];
+  // Vorziehen erst, wenn die laufende Runde derselben Aufgabe erledigt ist (wie bisher)
+  const openNow = new Set(tasks.map((i) => `${i.task.id}|${i.slot ?? ''}`));
+  const ahead = nextRounds(S.tasks, S.hh, S.me, S.today, doneMap()).filter((i) => !openNow.has(`${i.task.id}|${i.slot ?? ''}`));
   const aheadIds = new Set(ahead.map((i) => completionId(i.task.id, i.key, i.slot)));
   const inAhead = (i) => i.key && aheadIds.has(completionId(i.task.id, i.key, i.slot));
   const me = person(S.me);
@@ -629,17 +633,17 @@ function viewToday() {
     ...doneToday.filter((i) => !inAhead(i)).map((i) => [kindRank(i.task), nowRow(i, doneText(i))]),
   ].sort((a, b) => a[0] - b[0]).map((r) => r[1]).join('');
 
-  // Als Nächstes ersetzt bei der ruhigen Karte die eigenen kommenden Aufgaben; eingeklappt, wenn nichts ansteht
+  // Als Nächstes: eigene und gemeinsame Runden der nächsten 7 Tage zum Vorher-Abhaken; offen bei der ruhigen Karte, sonst eingeklappt
   const list = tasks.filter((i) => !inAhead(i));
   const aheadOpen = ahead.filter((i) => i.status !== 'done').length;
-  const aheadBlock = !calm ? '' : ahead.length
-    ? fold('ahead', head('Als Nächstes', aheadOpen), `<p class="small">Schon früher fertig? Der Haken gilt für die nächste Runde.</p><div class="list">${ahead.map((i) => nowRow(i, i.status === 'done' ? `vorab erledigt von ${byWho(i.completion.by)} · für ${dayLabel(i.due)}` : `${dayLabel(i.due)}, bis ${dayLabel(i.end)}`, true)).join('')}</div>`, true)
+  const aheadBlock = !calm && !ahead.length ? '' : ahead.length
+    ? fold('ahead', head('Als Nächstes', aheadOpen), `<p class="small">Schon früher fertig? Der Haken gilt für die nächste Runde.</p><div class="list">${ahead.map((i) => nowRow(i, i.status === 'done' ? `vorab erledigt von ${byWho(i.completion.by)} · für ${dayLabel(i.due)}` : termText(i), true)).join('')}</div>`, calm)
     : `<details class="fold" data-fold="ahead-empty"><summary>${head('Als Nächstes', 0)}</summary><p class="small">In den nächsten 7 Tagen steht nichts an.</p></details>`;
 
   return `${card}
     ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} extra</span>` : ''}`, `<div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
     ${aheadBlock}
-    ${list.length ? `<h2 class="main">${head('Aufgaben', list.length)}</h2>${rows(list)}` : ''}
+    ${list.length ? `<h2 class="main">${head('Heute', list.length)}</h2>${rows(list)}` : ''}
     ${others}
     ${need.length ? fold('need', `<span class="needhead">Bei Bedarf (${need.length})<small>Ohne festen Termin – abhaken, wenn du es gemacht hast</small></span>`, `<div class="list">${need.map((i) => nowRow(i, '', false, true)).join('')}</div>`) : ''}
     ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.filter((i) => !inAhead(i)).length), `<div class="list">${doneRows}</div>`) : ''}`;
@@ -1124,6 +1128,13 @@ const fullNote = () => `<p class="small fullnote">Haushalt für ${S.hh.persons.l
     <button class="addrow fullbtn" data-action="new-guest">${icon('plus', 18)}Neuen Haushalt anlegen</button>`;
 
 // Einmalig pro Person: Erst wenn alle einmal da waren, ist der Haushalt voll
+// Neue Fristen gelten ab dem Tag, an dem das erste Gerät v52 öffnet; ältere Termine behalten den alten Spielraum
+function markStrict() {
+  if (S.hh.strictFrom) return;
+  S.hh = { ...S.hh, strictFrom: S.today };
+  updateHH({ strictFrom: S.today });
+}
+
 function markSeen() {
   const field = `seen_${S.me}`;
   if (S.hh[field]) return;
@@ -1223,11 +1234,11 @@ function viewAway() {
   const rows = S.hh.persons.map((p) => {
     const a = S.hh.away?.[p.id] || {};
     return `<h2>${esc(p.name)}${p.id === S.me ? ' (du)' : ''}</h2>
-      <div class="inline"><label class="field">von<input type="date" data-away-from="${p.id}" min="${S.today}" value="${esc(a.from || '')}"></label>
-        <label class="field">bis<input type="date" data-away-to="${p.id}" min="${S.today}" value="${esc(a.to || '')}"></label></div>
+      <div class="inline"><label class="field">von<input type="date" data-away-from="${p.id}" min="${yesterday()}" value="${esc(a.from || '')}"></label>
+        <label class="field">bis<input type="date" data-away-to="${p.id}" min="${yesterday()}" value="${esc(a.to || '')}"></label></div>
       ${a.from || a.to ? `<button class="btn block" data-away-clear="${p.id}">Abwesenheit löschen</button>` : ''}`;
   }).join('');
-  return `${rows}<span class="hint">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn alle weg sind.</span>`;
+  return `${rows}<span class="hint">In dieser Zeit pausieren die eigenen Aufgaben: nichts wird „vergessen“. Gemeinsames pausiert nur, wenn alle weg sind. Krank gewesen? Ab gestern lässt sich nachtragen.</span>`;
 }
 
 // Gemeinsamer Urlaub: jede Person darf setzen, ändern und beenden
@@ -1451,6 +1462,7 @@ async function createHousehold(withTemplate) {
     persons: setupPersons(),
     rules: setupRules(withTemplate),
     createdAt: new Date().toISOString(),
+    strictFrom: st.start,
   };
   const tasks = setupTasks(withTemplate);
   st.step = 'busy'; renderSetup();
@@ -1586,7 +1598,7 @@ function toggle(input) {
   const slot = input.dataset.slot || null;
   // Als Nächstes: der Schlüssel steht in der Zeile, die Runde gehört der Person selbst
   const ahead = input.dataset.key;
-  const it = ahead ? { key: ahead, owner: S.me } : evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
+  const it = ahead ? { key: ahead, owner: 'shared' in input.dataset ? null : S.me } : evaluate(task, S.hh, S.today, S.comps).find((i) => (i.slot ?? null) === slot);
   if (!it?.key) return;
   const id = completionId(task.id, it.key, slot);
   if (input.checked) {
@@ -2019,11 +2031,13 @@ app.addEventListener('submit', (e) => {
   addOwnRule();
 });
 
-// Vergangenes bei Pause und Abwesenheit ließe sich nicht mehr zurücknehmen: gar nicht erst annehmen, das Feld zeigt wieder den gespeicherten Wert
-function refusePast(el, saved) {
-  if (!el.value || el.value >= S.today) return false;
+// Vergangenes bei Pause und Abwesenheit ließe sich nicht mehr zurücknehmen: gar nicht erst annehmen, das Feld zeigt wieder den gespeicherten Wert.
+// Abwesenheit darf einen Tag zurück (krank am Putztag, erst am nächsten Tag daran gedacht).
+const yesterday = () => fromDay(toDay(S.today) - 1);
+function refusePast(el, saved, min = S.today) {
+  if (!el.value || el.value >= min) return false;
   el.value = saved || '';
-  snack('Nur heute oder später möglich.');
+  snack(min === S.today ? 'Nur heute oder später möglich.' : 'Nur ab gestern möglich.');
   return true;
 }
 
@@ -2083,7 +2097,7 @@ app.addEventListener('change', (e) => {
   }
   if (d.awayFrom || d.awayTo) {
     const id = d.awayFrom || d.awayTo;
-    if (refusePast(el, S.hh.away?.[id]?.[d.awayFrom ? 'from' : 'to'])) return;
+    if (refusePast(el, S.hh.away?.[id]?.[d.awayFrom ? 'from' : 'to'], yesterday())) return;
     return updateHH(changeAway(S.hh, id, el.value ? moveRange(S.hh.away?.[id], d.awayFrom ? 'from' : 'to', el.value) : {}, S.today));
   }
 });
