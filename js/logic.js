@@ -402,10 +402,14 @@ export function endPause(list = [], todayStr) {
   const rest = list.filter((r) => r !== cur);
   return cur.from >= todayStr ? rest : [...rest, { ...cur, to: fromDay(toDay(todayStr) - 1) }];
 }
-// Pausiert = Haushalt pausiert oder zuständige Person war weg (bei Gemeinsamem: alle)
-const paused = (ctx, owner, a, b) => pauseDuring(ctx, a, b) || (owner === null
-  ? ctx.persons.every((p) => awayDuring(ctx, p.id, a, b))
-  : awayDuring(ctx, owner, a, b));
+// Entschuldigt die Abwesenheit den Termin a…b? Zuständige Person weg (bei Gemeinsamem: alle). Monatliches und Selteneres
+// mit neuer Frist nur, wenn die Abwesenheit bis zum Fristende dauert: Ein Tag krank lässt sonst noch Zeit.
+export function awayExcuses(ctx, task, owner, a, b) {
+  const [x, y] = task && !isRolling(task) && isStrict(task, a, ctx) ? [b, b] : [a, b];
+  return owner === null ? ctx.persons.every((p) => awayDuring(ctx, p.id, x, y)) : awayDuring(ctx, owner, x, y);
+}
+// Pausiert = Haushalt pausiert oder Abwesenheit entschuldigt
+const paused = (ctx, owner, a, b, task) => pauseDuring(ctx, a, b) || awayExcuses(ctx, task, owner, a, b);
 
 // ---------- Status ----------
 
@@ -502,9 +506,14 @@ export function personalWeek(days, todayStr) {
   return [fromDay(from), fromDay(from + 6)];
 }
 
-// Drängt heute? Vergessenes immer; Wöchentliches und „alle 2 Wochen“ nur am Termin und am Tag danach.
-export const isPressing = (item, todayStr) => item.status === 'overdue'
-  || (item.status === 'due' && !item.deferred && (!isRolling(item.task) || toDay(todayStr) <= toDay(item.due) + 1));
+// Drängt heute? Vergessenes immer; Wöchentliches und „alle 2 Wochen“ am Termin und am Tag danach;
+// Monatliches und Selteneres am Termin und an den letzten 2 Tagen der Frist (dazwischen steht es nur in der Liste).
+export const isPressing = (item, todayStr) => {
+  if (item.status === 'overdue') return true;
+  if (item.status !== 'due' || item.deferred) return false;
+  const t = toDay(todayStr);
+  return isRolling(item.task) ? t <= toDay(item.due) + 1 : t <= toDay(item.due) || t >= toDay(item.end) - 2;
+};
 
 // Fällt die Zeile wegen der Haushalts-Pause weg? Während der Pause alles, davor, was in die Pause fällt.
 export const pausedItem = (item, ctx, todayStr) => pauseDuring(ctx, toDay(todayStr), toDay(todayStr))
@@ -613,7 +622,7 @@ export function evaluate(task, ctx, todayStr, completions) {
     const pv = at(prev);
     const pvDone = get(prev.key, slot);
     const pvOpen = !daily && pv.counts && !pvDone;
-    const pvPaused = pvOpen && paused(ctx, pv.owner, pv.due, pv.end);
+    const pvPaused = pvOpen && paused(ctx, pv.owner, pv.due, pv.end, task);
 
     if (c?.counts && get(cur.key, slot)) {
       const n = nextDue();
@@ -624,7 +633,7 @@ export function evaluate(task, ctx, todayStr, completions) {
     if (pvOpen && !pvPaused && today <= pv.end) return set('due', pv, prev.key);
     // aktueller Termin samt Spielraum schon vorbei → vergessen
     if (c?.counts && !daily && today > c.end) {
-      if (paused(ctx, c.owner, c.due, c.end)) return idle();
+      if (paused(ctx, c.owner, c.due, c.end, task)) return idle();
       return set('overdue', c, cur.key);
     }
     // vorheriger Termin verpasst: einmal überfällig, bei der Person, die ihn verpasst hat;
@@ -672,13 +681,13 @@ function evaluateRolling(task, ctx, todayStr, completions) {
       item.status = 'offseason';
       return idle();
     }
-    const open = (x) => x && !paused(ctx, x.owner, x.due, x.end) && !get(x);
+    const open = (x) => x && !paused(ctx, x.owner, x.due, x.end, task) && !get(x);
     if (cur && !get(cur)) {
       // voriger Termin verpasst: einmal überfällig, bei der Person, die ihn verpasst hat; Abhaken zählt für den laufenden.
       // Mit Joker läuft seine Frist noch: bleibt bei dieser Person und deckt die neue Runde mit ab.
       if (open(prv)) return set(today <= prv.end ? 'due' : 'overdue', prv, cur.key);
       if (today <= cur.end) return set('due', cur, cur.key);
-      if (paused(ctx, cur.owner, cur.due, cur.end)) return idle();
+      if (paused(ctx, cur.owner, cur.due, cur.end, task)) return idle();
       return set('overdue', cur, cur.key);
     }
     // Heute Erledigtes bleibt heute „erledigt“ (zählt in der Statuskarte), erst danach lässt sich vorziehen
@@ -736,7 +745,7 @@ export function nextRounds(tasks, ctx, me, todayStr, doneById, days = 7) {
       if (seen.has(w.slot)) continue;
       seen.add(w.slot);
       const c = doneById.get(completionId(task.id, w.key, w.slot)) || null;
-      const off = w.deferred || paused(ctx, w.owner, toDay(w.start), toDay(isRolling(task) ? w.start : w.end));
+      const off = w.deferred || paused(ctx, w.owner, toDay(w.start), toDay(isRolling(task) ? w.start : w.end), task);
       if (off && !c) continue;
       out.push({
         task, slot: w.slot, owner: w.owner, key: w.key, status: c ? 'done' : 'upcoming', due: w.start, end: w.end,
@@ -760,7 +769,7 @@ export function dueBetween(tasks, ctx, fromStr, toStr, doneById, me) {
       const c = doneById.get(completionId(task.id, w.key, w.slot)) || null;
       if (c && c.by !== me) continue;
       if (!c && w.deferred) continue; // mit Joker verschoben: zählt erst, wenn erledigt
-      if (!c && paused(ctx, w.owner, toDay(w.start), toDay(w.end))) continue;
+      if (!c && paused(ctx, w.owner, toDay(w.start), toDay(w.end), task)) continue;
       out.push({ ...w, done: c });
     }
   }
@@ -835,7 +844,7 @@ export function goalStats(tasks, ctx, month, doneById) {
       if (anchor < from || anchor > to) continue;
       const hit = doneById.has(completionId(task.id, w.key, w.slot));
       if (!hit && w.deferred) continue;
-      if (!hit && paused(ctx, w.owner, toDay(w.start), toDay(w.end))) continue;
+      if (!hit && paused(ctx, w.owner, toDay(w.start), toDay(w.end), task)) continue;
       total++;
       if (hit) done++;
       if (w.end > lastEnd) lastEnd = w.end;

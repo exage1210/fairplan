@@ -5,7 +5,7 @@ import {
   packageOwners, rotationBase, swapCount, nextSwap, ownerNow, personalWeek, isPressing, isRolling, daysFor,
   PACKAGES, MAX_PERSONS, isPackage, swapsByRound, upsertHome,
   goalOf, goalStats, goalResult, jokerOf, jokerTick, canJoker, useJoker, JOKER_PRICE, JOKER_MAX,
-  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull, PALETTE, colorName, colorLabel, urgency, pauseDuring, currentPause, setPause, endPause, pausedItem, changeAway, moveRange,
+  nextRounds, migrateColors, suggestColor, revokeGoalHits, revokeStats, householdFull, PALETTE, colorName, colorLabel, urgency, pauseDuring, currentPause, setPause, endPause, pausedItem, changeAway, moveRange, awayExcuses,
 } from './logic.js';
 import { openStore, newCode, newId, normalizeCode, formatCode } from './store.js';
 import { AREAS, QUESTIONS, suggestTasks, suggestRules, defaultAssign, OUR_TASKS, OUR_RULES, RULE_SEASONS, RULE_COMMON, RULE_GROUPS, RULE_SUGGESTIONS, RULE_RENAMED, GOAL_REWARDS } from './template.js';
@@ -31,7 +31,7 @@ const DEFAULT_HOUSEHOLD = {
   sharedDays: [5], // gemeinsamer Putztag: Samstag
 };
 
-const APP_VERSION = '2.0.52';
+const APP_VERSION = '2.0.53';
 const LOGO = '<h1 class="logo">fairplan</h1>';
 const ICON_PATHS = {
   home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -466,8 +466,9 @@ function nowRow(it, sub = '', ahead = false, plain = false) {
   const locked = done && by !== S.me;
   const off = !it.key; // nächster Termin liegt in einer späteren Periode → noch nicht abhakbar
   const extra = plain ? '' : [it.owner === null && !done ? 'Gemeinsam' : '', sub, t.note ? esc(t.note) : ''].filter(Boolean).join(' · ');
-  // Joker erst anbieten, wenn es knapp wird: sonst stünde der Knopf bei jeder Aufgabe
-  const joker = it.owner === S.me && canJoker(it, S.today) && jokerOf(S.hh, S.me).count > 0 && toDay(it.end) - toDay(S.today) <= 2
+  // Joker erst anbieten, wenn es knapp wird: sonst stünde der Knopf bei jeder Aufgabe. Wöchentliches erst, wenn es rot ist
+  const joker = it.owner === S.me && canJoker(it, S.today) && jokerOf(S.hh, S.me).count > 0
+    && (isRolling(t) ? it.status === 'overdue' : toDay(it.end) - toDay(S.today) <= 2)
     ? `<button class="jokerbtn" data-action="joker" data-task="${esc(t.id)}" data-slot="${esc(it.slot ?? '')}">Joker: 1 Woche später</button>` : '';
   return swipeRow({
     done, locked, off, by,
@@ -527,9 +528,7 @@ function updateBadge() {
   (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 
-const paused = (w) => pauseDuring(S.hh, toDay(w.start), toDay(w.end)) || (w.owner === null
-  ? S.hh.persons.every((p) => awayDuring(S.hh, p.id, toDay(w.start), toDay(w.end)))
-  : awayDuring(S.hh, w.owner, toDay(w.start), toDay(w.end)));
+const paused = (w) => pauseDuring(S.hh, toDay(w.start), toDay(w.end)) || awayExcuses(S.hh, w.task, w.owner, toDay(w.start), toDay(w.end));
 const colorOf = (id) => { const p = person(id); return p ? `var(--c-${p.color})` : 'var(--shared)'; };
 // Für Punkte und Ringe im Plan: je Darstellung gut sichtbar
 const dotOf = (id) => { const p = person(id); return p ? `var(--d-${p.color})` : 'var(--shared)'; };
@@ -567,7 +566,7 @@ const seriesText = (n) => {
 // Eigene Aufgaben pausieren, solange man heute abwesend ist oder ihr Termin in die Abwesenheit fällt.
 // Andere sehen sie weiter und können vertreten.
 const myPaused = (i) => i.owner === S.me && i.due && i.end
-  && (isAway(S.me, S.today) || awayDuring(S.hh, S.me, toDay(i.due), toDay(isRolling(i.task) ? i.due : i.end)));
+  && (isAway(S.me, S.today) || awayExcuses(S.hh, i.task, S.me, toDay(i.due), toDay(isRolling(i.task) ? i.due : i.end)));
 
 const byUrgency = (a, b) => urgency(a, S.today) - urgency(b, S.today) || byOwnerRhythm(a, b);
 
@@ -611,9 +610,10 @@ function viewToday() {
 
   const headline = homePause ? `Haushalt pausiert bis ${fmtDate(homePause.to)}` : meAway ? `Du bist bis ${fmtDate(away.to)} abwesend, deine Aufgaben pausieren.`
     : calm ? 'Alles erledigt' : pressing.length ? `Noch ${pressing.length} offen`
-      : now.length ? `Noch ${now.length} bis zum nächsten Termin` : 'Heute ist nichts dran.';
+      : now.length ? 'Heute drängt nichts' : 'Heute ist nichts dran.';
   const card = `${movedNote()}${goalNote()}${swapNote()}<section class="card status">
-      <div class="status-head">${calm ? starSvg(`var(--c-${me.color})`, !S.cheered) : ''}<div><b>${headline}</b>${calm ? '<span>Genieß den Tag.</span>' : homePause ? '<span>Alle Aufgaben pausieren, nichts wird rot.</span>' : ''}</div></div>
+      <div class="status-head">${calm ? starSvg(`var(--c-${me.color})`, !S.cheered) : ''}<div><b>${headline}</b>${calm ? '<span>Genieß den Tag.</span>' : homePause ? '<span>Alle Aufgaben pausieren, nichts wird rot.</span>'
+        : !pressing.length && now.length ? `<span>${now.length === 1 ? '1 Aufgabe hat' : `${now.length} Aufgaben haben`} noch Zeit.</span>` : ''}</div></div>
       ${weekAll && !homePause ? `<div><div class="bar-head"><span>Diese Woche ${weekDone} von ${weekAll}</span></div><div class="bar thin"><i style="width:${Math.round((weekDone / weekAll) * 100)}%"></i></div></div>` : ''}
       ${S.today < S.hh.setup ? `<span class="card-next">Euer Plan startet am ${fmtDate(S.hh.setup, true)}</span>` : ''}
       ${swap && toDay(swap) - toDay(S.today) <= 3 ? `<span class="card-next">Tausch am ${fmtDate(swap)}</span>` : ''}
@@ -635,6 +635,8 @@ function viewToday() {
 
   // Als Nächstes: eigene und gemeinsame Runden der nächsten 7 Tage zum Vorher-Abhaken; offen bei der ruhigen Karte, sonst eingeklappt
   const list = tasks.filter((i) => !inAhead(i));
+  // Rückstände eigens über „Heute“
+  const late = list.filter((i) => i.status === 'overdue'), current = list.filter((i) => i.status !== 'overdue');
   const aheadOpen = ahead.filter((i) => i.status !== 'done').length;
   const aheadBlock = !calm && !ahead.length ? '' : ahead.length
     ? fold('ahead', head('Als Nächstes', aheadOpen), `<p class="small">Schon früher fertig? Der Haken gilt für die nächste Runde.</p><div class="list">${ahead.map((i) => nowRow(i, i.status === 'done' ? `vorab erledigt von ${byWho(i.completion.by)} · für ${dayLabel(i.due)}` : termText(i), true)).join('')}</div>`, calm)
@@ -643,7 +645,8 @@ function viewToday() {
   return `${card}
     ${rules.length ? fold('rules', `${head('Abmachungen', openRules.length)}${bonusToday ? `<span class="count bonus">+${bonusToday} extra</span>` : ''}`, `<div class="list">${openRules.map(ruleRow).join('')}</div>`) : ''}
     ${aheadBlock}
-    ${list.length ? `<h2 class="main">${head('Heute', list.length)}</h2>${rows(list)}` : ''}
+    ${late.length ? `<h2 class="main">${head('Nachholen', late.length)}</h2>${rows(late)}` : ''}
+    ${current.length ? `<h2 class="main">${head('Heute', current.length)}</h2>${rows(current)}` : ''}
     ${others}
     ${need.length ? fold('need', `<span class="needhead">Bei Bedarf (${need.length})<small>Ohne festen Termin – abhaken, wenn du es gemacht hast</small></span>`, `<div class="list">${need.map((i) => nowRow(i, '', false, true)).join('')}</div>`) : ''}
     ${doneRows ? fold('done', head('Erledigt', doneRules.length + doneToday.filter((i) => !inAhead(i)).length), `<div class="list">${doneRows}</div>`) : ''}`;
